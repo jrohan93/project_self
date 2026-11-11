@@ -76,4 +76,4 @@
 - [x] ORM → SQLAlchemy 2.0 + Alembic (동기)
 - [x] GitHub 저장소 생성 → https://github.com/jrohan93/project_self
 - [x] 중복 제품 처리 → 값까지 같을 때만 합침 (위 "중복 규칙")
-- [ ] 오류 값 처리 규칙 (나트륨 > 39,300mg/100 9건 등, 목록: `reports/data_issues.csv`) — 적재 단계에서 정함
+- [x] 오류 값 처리 → 나트륨 오류 9건은 `corrections.csv`로 보정 (적재 시 원본 위에 덮어씀). 당류>탄수화물·포화지방>지방 26건은 그대로 둠
