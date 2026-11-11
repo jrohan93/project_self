@@ -1,5 +1,14 @@
-# 데이터 다운로드 스크립트(download_nutrition.py)에 필요한 것
+# 데이터 다운로드·정리
 requests==2.34.2
 pandas==3.1.1
 openpyxl==3.1.5
 python-dotenv==1.2.4
+
+# DB (MySQL 접속, 테이블 정의, 마이그레이션)
+SQLAlchemy==2.1.8
+PyMySQL==1.2.4
+cryptography==50.0.2  # MySQL 8 기본 로그인 방식(caching_sha2_password)에 필요
+alembic==1.20.1
+
+# 테스트
+pytest==9.2.0

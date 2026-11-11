@@ -1,0 +1,27 @@
+# 개발용 MySQL. 실행: docker compose up -d
+# 비밀번호 등은 같은 폴더의 .env에서 읽는다 (.env.example 참고)
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: nutrition-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Seoul
+    # 한글 제품명을 위해 utf8mb4
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 컨테이너를 처음 만들 때 한 번 실행: 테스트용 DB 생성
+      - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  mysql_data:

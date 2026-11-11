@@ -16,7 +16,7 @@
 ## 기술 스택
 - Python 3.14, FastAPI, MySQL, (v2부터) Redis
 - 화면: **FastAPI + Jinja2 템플릿** (2026-11-11 결정) — 화면이 검색·목록·상세뿐이라 백엔드에 집중하기 위해
-- ORM/마이그레이션: **SQLAlchemy 2.0 + Alembic**, v1은 동기(sync) + PyMySQL (2026-11-11 결정)
+- ORM/마이그레이션: **SQLAlchemy 2.x + Alembic**, v1은 동기(sync) + PyMySQL (2026-11-11 결정)
   - 이유: 33만 건 재실행 안전 적재에 MySQL `on_duplicate_key_update`를 그대로 쓸 수 있고, v2 FULLTEXT ngram 인덱스를 Alembic `op.execute`로 관리하기 쉬움. Python 3.14 지원.
   - 동기로 시작한 이유: 한 줄씩 설명하기 쉬움. 비동기 전환은 v2에서 측정 숫자를 근거로 판단.
   - 이전 프로젝트에서는 Tortoise ORM + aerich 사용 경험 있음
@@ -70,13 +70,25 @@
 - 명백한 오류 목록(나트륨 > 39,300mg/100 9건, 당류 > 탄수화물 4건, 포화지방 > 지방 22건)은 `reports/data_issues.csv`.
 - **중복 규칙 (2026-11-11 결정)**: 식품명 + 업체 + 기준량 + 에너지·나트륨·당류·포화지방이 모두 같을 때만 하나로 합친다 (329,363 → 324,763행). 이름+제조사만 같은 묶음 중 3,937개는 영양값이 달라 다른 제품으로 본다.
 
+## 코드 구조 (v1 진행 중: 적재 완료, 다음은 검색)
+| 경로 | 내용 |
+|---|---|
+| `app/db.py` | `.env`의 `DATABASE_URL`로 엔진 생성 |
+| `app/models.py` | `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). 인덱스는 v2에서 추가 |
+| `app/loader.py` | 적재: CSV → 보정 → 칼럼 정리 → 중복 합치기 → `ON DUPLICATE KEY UPDATE`. `python -m app.loader` |
+| `alembic/` | 마이그레이션. `alembic.ini`는 **ASCII만** (Windows에서 cp949로 읽혀 한글이 있으면 깨짐) |
+| `docker-compose.yml`, `docker/mysql-init.sql` | MySQL 8.4 + 테스트 DB `nutrition_test` |
+| `tests/` | `pytest`. DB 테스트는 `TEST_DATABASE_URL` 사용, MySQL 꺼져 있으면 skip |
+
 ## 이전 경험에서 가져올 것
 - 이전 레시피 앱 설계에서 정한 것: 비밀번호 bcrypt, JWT, 리프레시 토큰 순환·재사용 감지, 로그인 실패 5회/15분 잠금(Redis, 가입 여부와 무관), 타인 데이터 접근 시 404. → v3에서 재사용.
 - 그 코드 자체는 남아 있지 않으므로 새로 작성한다.
 
 ## 아직 정할 것
 - [x] 화면 방식 → Jinja2 템플릿
-- [x] ORM → SQLAlchemy 2.0 + Alembic (동기)
+- [x] ORM → SQLAlchemy 2.x + Alembic (동기)
 - [x] GitHub 저장소 생성 → https://github.com/jrohan93/project_self
 - [x] 중복 제품 처리 → 값까지 같을 때만 합침 (위 "중복 규칙")
 - [x] 오류 값 처리 → 나트륨 오류 9건은 `corrections.csv`로 보정 (적재 시 원본 위에 덮어씀). 당류>탄수화물·포화지방>지방 26건은 그대로 둠
+- [x] 에너지 오류 → 라코니코 올리브 오일 5,780 → 840kcal/100g (지방 93.33g×9)로 `corrections.csv` 보정. 900~1000kcal 기름 80건은 반올림 수준이라 그대로 둠
+- [x] 데이터 적재 완료 (2026-11-11): 324,763건, 22.7초, 재실행해도 행 수 동일, 테스트 11개 통과

@@ -7,14 +7,15 @@
 
 ## 기술 스택
 - Python 3.14, FastAPI, MySQL, (v2부터) Redis
-- ORM/마이그레이션: SQLAlchemy 2.0 (동기, PyMySQL) + Alembic
+- ORM/마이그레이션: SQLAlchemy 2.x (동기, PyMySQL) + Alembic
+- 테스트: pytest
 - 화면: Jinja2 템플릿 (FastAPI가 HTML을 직접 렌더링)
 - 실행 환경: Windows, `.venv` 가상환경, Docker Compose
 
 ## 진행 상황
 | 단계 | 내용 | 상태 |
 |---|---|---|
-| v1 핵심 | 데이터 적재, 제품 검색, 상세, 같은 종류 비교, 대체 제품 추천, 간단한 웹 화면 | 진행 중 (데이터 준비 완료) |
+| v1 핵심 | 데이터 적재, 제품 검색, 상세, 같은 종류 비교, 대체 제품 추천, 간단한 웹 화면 | 진행 중 (**데이터 적재 완료**, 다음: 검색) |
 | v2 성능 | 인덱스, 한글 검색(FULLTEXT ngram), Redis 캐시, 속도 측정 | 예정 |
 | v3 회원 | 로그인, 관심 제품 저장 | 예정 |
 | v4 AI | 문장을 검색 조건으로 변환 | 예정 |
@@ -26,7 +27,13 @@
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env   # .env에 공공데이터포털 인증키 입력
+copy .env.example .env   # .env에 인증키·DB 비밀번호 입력
+```
+
+### DB 준비 (Docker Desktop 필요)
+```powershell
+docker compose up -d                 # MySQL 8.4 실행 (처음 실행 시 테스트용 DB nutrition_test도 생성)
+alembic upgrade head                 # products 테이블 생성
 ```
 
 ### 데이터 받기
@@ -36,6 +43,48 @@ copy .env.example .env   # .env에 공공데이터포털 인증키 입력
 python download_nutrition.py process    # 가공식품 → processed_all.csv (v1 주 데이터)
 python download_nutrition.py material   # 원재료성식품 → nutrition_all.csv (v5용)
 ```
+
+### 데이터 적재
+```powershell
+python -m app.loader                 # processed_all.csv → products 테이블
+```
+순서: CSV 읽기 → `corrections.csv` 보정 → 필요한 칼럼만 정리 → 값까지 같은 중복 합치기 → 저장
+
+- 식품코드를 기본키로 두고 `INSERT ... ON DUPLICATE KEY UPDATE`로 저장 → **다시 실행해도 중복이 생기지 않고 새 값으로 덮어씀**
+- 전체를 한 트랜잭션으로 저장 → 중간에 실패하면 전부 되돌려서 반쯤 들어간 상태가 남지 않음
+- `corrections.csv`의 원래값이 지금 데이터와 다르면 멈춤 → 데이터를 새로 받은 뒤 엉뚱한 값을 덮어쓰지 않게
+- 알려진 한계: 새 CSV에서 사라진 제품은 DB에서 지워지지 않음
+
+적재 결과 (2026-11-11, 로컬 Docker MySQL 8.4):
+
+| 항목 | 결과 |
+|---|---|
+| 원본 → 저장 | 329,363건 → **324,763건** (중복 4,600건 합침) |
+| 첫 적재 시간 (정리 + 저장) | **22.7초** (정리만 6.7초) |
+| 다시 적재 | 21.4초, 행 수 그대로 324,763건 (식품코드 중복 0) |
+| NULL로 저장된 값 | 나트륨 46, 당류 4, 포화지방 13, 에너지 0, 업체 562 |
+| 기준량 | 100g 283,368건 / 100ml 41,395건 |
+| 보정 확인 | 나트륨 최댓값 38,686mg (오류 값 없음), 생선까스 383mg, 특양 85kcal·97mg |
+| 테이블 크기 | 44.6MB (인덱스 없음, PK만) |
+
+### 테스트
+```powershell
+pytest                               # 11개 통과 (DB 테스트 2개 포함, 3.8초)
+```
+- `tests/test_loader.py`: 빈칸 → NULL, 업체명 대체, 보정 적용·원래값 불일치 시 중단, 중복 합치기 규칙 (DB 없이 실행)
+- `tests/test_load_db.py`: 두 번 적재해도 중복 없음, 빈칸이 DB에 NULL로 저장됨 (테스트 전용 DB `nutrition_test` 사용, MySQL이 꺼져 있으면 건너뜀)
+
+### 테이블 (`products`)
+| 칼럼 | 내용 |
+|---|---|
+| `food_code` (PK) | 공공데이터 식품코드 |
+| `name` | 식품명 |
+| `maker` | 제조사, 없으면 수입사, 둘 다 없으면 NULL |
+| `category` | 대표식품명 (같은 종류 비교 묶음) |
+| `basis` | 기준량 `100g` / `100ml` |
+| `energy_kcal`, `sodium_mg`, `sugar_g`, `sat_fat_g` | 기준량당 영양값, 빈칸은 NULL |
+
+검색용 인덱스는 **일부러 아직 만들지 않았습니다.** v1에서 인덱스 없이 검색 속도를 재고 v2에서 비교하기 위해서입니다.
 
 ## 데이터에서 확인한 것 (processed_all.csv, 2026-11-11 기준)
 | 항목 | 결과 | 설계에 반영할 점 |
@@ -52,6 +101,7 @@ python download_nutrition.py material   # 원재료성식품 → nutrition_all.c
 | 나트륨 오류 | 100g당 39,300mg(소금 100%) 초과 9건 (예: 735,971mg) | 확인한 값으로 보정 → `corrections.csv` (아래) |
 | 작은 모순 | 당류 > 탄수화물 4건, 포화지방 > 지방 22건 (대부분 0.5~1g 차이) | 그대로 둠 (v1 비교에 영향 거의 없음) |
 | 에너지 0kcal | 1,636건 (탄산음료·차·탄산수·알룰로스 등) | 실제 0kcal 제품이라 그대로 둠 |
+| 에너지 900kcal 초과 | 81건. 80건은 기름(900~1000, 표시 반올림 수준), 1건은 올리브유 5,780kcal로 명백한 오류 | 기름 80건은 그대로, 올리브유는 840kcal로 보정 → `corrections.csv` |
 
 ### 오류 값 보정 (`corrections.csv`)
 원본 CSV는 그대로 두고, 손으로 확인한 보정값을 `corrections.csv`에 따로 기록합니다. 적재할 때 원본 위에 덮어씁니다.
@@ -61,8 +111,9 @@ python download_nutrition.py material   # 원재료성식품 → nutrition_all.c
 |---|---|---|
 | 나트륨 7건 (생선까스 2, 건해삼, 짜차이, 크래커, 소다 비스킷 2) | 383,000 → 383 등 | 단위·자릿수 입력 오류로 판단. 같은 업체의 비슷한 제품 값과 비교해 확인 |
 | 특양·깐양 (민우축산유통) | 영양값 9개 전체 | 원본 행이 통째로 잘못 입력됨(나트륨 100,000, 나머지 0). **소 양 일반 영양값**으로 대체했으며 제품 표시값은 아님 |
+| 라코니코 엑스트라 버진 올리브 오일 | 에너지 5,780 → 840kcal/100g | 지방 100g의 최대 열량(900kcal)을 넘는 오류. 이 제품의 지방 93.33g × 9kcal로 계산. 조사한 100ml당 약 824kcal는 100g으로 바꾸면 약 905kcal라 지방값과 맞지 않아 쓰지 않음 |
 
-보정 후 100g당 나트륨이 39,300mg을 넘는 제품: 9건 → 0건
+보정 결과: 100g당 나트륨 39,300mg 초과 9건 → 0건, 에너지 최댓값 5,780 → 1,000kcal (보정한 값은 총 26개)
 
 ## 성능 기록
 v2 비교를 위해 v1 검색 응답 시간을 여기에 기록합니다. (아직 측정 전)

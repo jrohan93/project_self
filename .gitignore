@@ -5,6 +5,7 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # 데이터 파일: 용량이 커서 커밋하지 않는다 (processed_all.csv는 145MB로 GitHub 100MB 제한 초과)
 # README의 "데이터 받기"대로 스크립트를 실행하면 다시 만들 수 있다
