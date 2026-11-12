@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from sqlalchemy import Numeric, String
+from sqlalchemy import Index, Numeric, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -31,5 +31,12 @@ class Product(Base):
     sugar_g: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     sat_fat_g: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
 
-    # 검색용 인덱스는 일부러 아직 만들지 않는다.
-    # v1에서 인덱스 없이 검색 속도를 재고, v2에서 인덱스를 추가한 뒤 비교하기 위해서다.
+    # v2 인덱스 (alembic 0002). 비교·추천·대표식품명 검색은 모두
+    # '대표식품명 = ? AND 기준량 = ?'으로 한 묶음만 보므로 이 둘을 앞에 두고,
+    # 그 묶음 안에서 낮은 순으로 찾는 영양값을 세 번째에 둔다.
+    # 대표식품명만으로 찾을 때도 앞쪽(category)만 써서 이 인덱스를 탄다.
+    __table_args__ = (
+        Index("ix_products_category_basis_sodium", "category", "basis", "sodium_mg"),
+        Index("ix_products_category_basis_sugar", "category", "basis", "sugar_g"),
+        Index("ix_products_category_basis_sat_fat", "category", "basis", "sat_fat_g"),
+    )
