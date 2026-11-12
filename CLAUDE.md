@@ -70,16 +70,17 @@
 - 명백한 오류 목록(나트륨 > 39,300mg/100 9건, 당류 > 탄수화물 4건, 포화지방 > 지방 22건)은 `reports/data_issues.csv`.
 - **중복 규칙 (2026-11-11 결정)**: 식품명 + 업체 + 기준량 + 에너지·나트륨·당류·포화지방이 모두 같을 때만 하나로 합친다 (329,363 → 324,763행). 이름+제조사만 같은 묶음 중 3,937개는 영양값이 달라 다른 제품으로 본다.
 
-## 코드 구조 (v1 진행 중: 적재·검색·상세·비교 완료, 다음은 대체 제품 추천)
+## 코드 구조 (v1 진행 중: 적재·검색·상세·비교·추천 완료, 다음은 웹 화면)
 | 경로 | 내용 |
 |---|---|
 | `app/db.py` | `.env`의 `DATABASE_URL`로 엔진 생성 |
 | `app/models.py` | `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). 인덱스는 v2에서 추가 |
 | `app/main.py` | FastAPI 앱. `GET /api/products` (검색), `GET /api/products/{식품코드}` (상세, 없으면 404), `GET /api/compare` (같은 종류 비교). 실행 `uvicorn app.main:app --reload` |
+| `app/recommend.py` | 대체 제품 추천: 같은 (대표식품명, 기준량)에서 나트륨 또는 당류가 기준 제품보다 낮은 제품, 낮은 순(당류로 찾을 때는 나트륨이 더 높은 것 제외). 기준 값이 NULL이면 빈 목록. API는 `GET /api/products/{식품코드}/alternatives?by=sodium|sugar&limit=10` |
 | `app/compare.py` | 같은 종류 비교: (대표식품명, 기준량) 묶음을 나트륨·당류·포화지방 낮은 순, NULL은 `IS NULL`로 맨 뒤 |
 | `app/search.py` | 검색: 이름 `LIKE` + 대표식품명 필터 + 이름·식품코드순 + 쪽 나누기 |
 | `app/schemas.py` | 응답 모양 (pydantic). 영양값은 float, 없으면 null |
-| `scripts/measure_search.py` | 검색·상세·비교 응답 시간 측정 (README "성능 기록"). `python -m scripts.measure_search` |
+| `scripts/measure_search.py` | 검색·상세·비교·추천 응답 시간 측정 (README "성능 기록"). `python -m scripts.measure_search` |
 | `app/loader.py` | 적재: CSV → 보정 → 칼럼 정리 → 중복 합치기 → `ON DUPLICATE KEY UPDATE`. `python -m app.loader` |
 | `alembic/` | 마이그레이션. `alembic.ini`는 **ASCII만** (Windows에서 cp949로 읽혀 한글이 있으면 깨짐) |
 | `docker-compose.yml`, `docker/mysql-init.sql` | MySQL 8.4 + 테스트 DB `nutrition_test` |
@@ -100,6 +101,9 @@
 - [x] 제품 검색 완료 (2026-11-12): 인덱스 없이 중앙값 약 256~294ms (전체 스캔 두 번: COUNT + 목록), 테스트 19개 통과
 - [x] 제품 상세 완료 (2026-11-12): 식품코드(PK)로 조회 중앙값 14ms, 정보 없음은 null, 없는 코드 404, 테스트 22개 통과
 - [x] 같은 종류 비교 완료 (2026-11-12): (대표식품명, 기준량) 묶음, 낮은 순 + NULL 맨 뒤, 중앙값 257ms(간장)~306ms(기타 빵), 테스트 28개 통과 (간장 NULL 보정 테스트 포함 29개)
+- [x] 대체 제품 추천 완료 (2026-11-12): 같은 (대표식품명, 기준량)에서 고른 값이 확실히 낮은 것만, 낮은 순, NULL 후보 제외·기준 NULL이면 빈 목록, 중앙값 265ms(간장)~327ms(기타 빵), 테스트 38개 통과
+  - 당류로 찾을 때는 나트륨이 기준 제품보다 높은(또는 정보 없는) 후보를 뺀다 (사용자 결정). 기준 제품 나트륨이 NULL이면 이 조건 생략. 나트륨으로 찾을 때 당류 조건은 걸지 않음
+  - 낮은 순 맨 앞에 불고기 간장 같은 양념형 간장이 나오는 건 데이터 분류 문제라 그대로 두고 README에 기록만 함
 - [x] 간장 100ml 중 나트륨 1,000mg 미만 13건(중앙값 약 6,000mg) → 0건 (2026-11-12)
   - 7건 보정: 풍성한진간장·이금기 해선간장·니비시 사시미간장·금패사시미·야마사·옛장·오복양조. 금패·야마사는 1회 제공량(5ml/15ml) 값이 들어간 경우라 환산
   - 6건은 근거를 못 찾아 나트륨을 NULL로 (사용자 결정): 햄프국간장·청정원5년숙성·해천 해선간장·다화당 조선간장·한식조선간장·ICHIBIKI 사시미용. 그중 에너지 5~9kcal로 1회분 값처럼 보이는 3건(청정원·해천·ICHIBIKI)은 에너지·당류도 NULL

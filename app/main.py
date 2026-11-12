@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.compare import Basis, SortKey, compare_products
 from app.db import make_engine
 from app.models import Product
-from app.schemas import CompareResult, ProductItem, SearchResult
+from app.recommend import RecommendKey, find_alternatives
+from app.schemas import AlternativesResult, CompareResult, ProductItem, SearchResult
 from app.search import search_products
 
 app = FastAPI(title="가공식품 영양 비교 검색")
@@ -52,6 +53,26 @@ def get_product(food_code: str, session: Session = Depends(get_session)) -> Prod
     if product is None:
         raise HTTPException(status_code=404, detail="해당 제품이 없어요.")
     return ProductItem.model_validate(product)
+
+
+@app.get("/api/products/{food_code}/alternatives", response_model=AlternativesResult)
+def get_alternatives(
+    food_code: str,
+    by: RecommendKey = Query("sodium", description="이 값이 더 낮은 제품을 찾는다"),
+    limit: int = Query(10, ge=1, le=50),
+    session: Session = Depends(get_session),
+) -> AlternativesResult:
+    product = session.get(Product, food_code)
+    if product is None:
+        raise HTTPException(status_code=404, detail="해당 제품이 없어요.")
+
+    total, alternatives = find_alternatives(session, product, by, limit)
+    return AlternativesResult(
+        product=ProductItem.model_validate(product),
+        by=by,
+        total=total,
+        items=[ProductItem.model_validate(p) for p in alternatives],
+    )
 
 
 @app.get("/api/compare", response_model=CompareResult)

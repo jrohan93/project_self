@@ -26,6 +26,13 @@ class SearchResult(BaseModel):
     items: list[ProductItem]
 
 
+class AlternativesResult(BaseModel):
+    product: ProductItem  # 기준 제품
+    by: str  # 무엇이 더 낮은 제품을 찾았는지 (sodium / sugar)
+    total: int  # 기준 제품보다 낮은 제품 전체 수
+    items: list[ProductItem]  # 낮은 순으로 limit개
+
+
 class CompareResult(SearchResult):
     # 어떤 묶음을 무엇으로 정렬했는지 함께 돌려준다
     category: str
