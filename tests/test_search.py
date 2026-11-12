@@ -1,11 +1,8 @@
 """검색 API 테스트. 테스트 DB에 제품 몇 개를 넣고 /api/products를 호출한다."""
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
 
 from app.loader import save
-from app.main import app, get_session
 
 
 def product(code, name, category, basis="100g", sodium=100):
@@ -14,7 +11,7 @@ def product(code, name, category, basis="100g", sodium=100):
 
 
 @pytest.fixture
-def client(engine):
+def client(engine, api):
     save(engine, [
         product("P1", "양조간장", "간장", basis="100ml", sodium=6000),
         product("P2", "진간장", "간장", basis="100ml", sodium=5500),
@@ -24,17 +21,7 @@ def client(engine):
         product("P6", "살코기 참치", "참치"),
         product("P7", "100% 사과주스", "과채주스"),
     ])
-
-    # 앱이 실제 DB 대신 테스트 DB를 쓰도록 세션을 바꿔 끼운다
-    TestSession = sessionmaker(engine)
-
-    def test_session():
-        with TestSession() as session:
-            yield session
-
-    app.dependency_overrides[get_session] = test_session
-    yield TestClient(app)
-    app.dependency_overrides.clear()
+    return api
 
 
 def names(response):

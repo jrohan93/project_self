@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import make_engine
+from app.models import Product
 from app.schemas import ProductItem, SearchResult
 from app.search import search_products
 
@@ -41,3 +42,12 @@ def list_products(
         size=size,
         items=[ProductItem.model_validate(p) for p in products],
     )
+
+
+@app.get("/api/products/{food_code}", response_model=ProductItem)
+def get_product(food_code: str, session: Session = Depends(get_session)) -> ProductItem:
+    # 식품코드가 기본키라서 session.get으로 한 건을 바로 찾는다
+    product = session.get(Product, food_code)
+    if product is None:
+        raise HTTPException(status_code=404, detail="해당 제품이 없어요.")
+    return ProductItem.model_validate(product)

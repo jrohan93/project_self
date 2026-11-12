@@ -70,19 +70,19 @@
 - 명백한 오류 목록(나트륨 > 39,300mg/100 9건, 당류 > 탄수화물 4건, 포화지방 > 지방 22건)은 `reports/data_issues.csv`.
 - **중복 규칙 (2026-11-11 결정)**: 식품명 + 업체 + 기준량 + 에너지·나트륨·당류·포화지방이 모두 같을 때만 하나로 합친다 (329,363 → 324,763행). 이름+제조사만 같은 묶음 중 3,937개는 영양값이 달라 다른 제품으로 본다.
 
-## 코드 구조 (v1 진행 중: 적재·검색 완료, 다음은 상세)
+## 코드 구조 (v1 진행 중: 적재·검색·상세 완료, 다음은 같은 종류 비교)
 | 경로 | 내용 |
 |---|---|
 | `app/db.py` | `.env`의 `DATABASE_URL`로 엔진 생성 |
 | `app/models.py` | `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). 인덱스는 v2에서 추가 |
-| `app/main.py` | FastAPI 앱. `GET /api/products` (검색). 실행 `uvicorn app.main:app --reload` |
+| `app/main.py` | FastAPI 앱. `GET /api/products` (검색), `GET /api/products/{식품코드}` (상세, 없으면 404). 실행 `uvicorn app.main:app --reload` |
 | `app/search.py` | 검색: 이름 `LIKE` + 대표식품명 필터 + 이름·식품코드순 + 쪽 나누기 |
 | `app/schemas.py` | 응답 모양 (pydantic). 영양값은 float, 없으면 null |
-| `scripts/measure_search.py` | 검색 응답 시간 측정 (README "성능 기록"). `python -m scripts.measure_search` |
+| `scripts/measure_search.py` | 검색·상세 응답 시간 측정 (README "성능 기록"). `python -m scripts.measure_search` |
 | `app/loader.py` | 적재: CSV → 보정 → 칼럼 정리 → 중복 합치기 → `ON DUPLICATE KEY UPDATE`. `python -m app.loader` |
 | `alembic/` | 마이그레이션. `alembic.ini`는 **ASCII만** (Windows에서 cp949로 읽혀 한글이 있으면 깨짐) |
 | `docker-compose.yml`, `docker/mysql-init.sql` | MySQL 8.4 + 테스트 DB `nutrition_test` |
-| `tests/` | `pytest`. DB 테스트는 `TEST_DATABASE_URL` 사용(준비물은 `conftest.py`), MySQL 꺼져 있으면 skip |
+| `tests/` | `pytest`. DB 테스트는 `TEST_DATABASE_URL` 사용(준비물 `engine`·`api`는 `conftest.py`), MySQL 꺼져 있으면 skip |
 
 ## 이전 경험에서 가져올 것
 - 이전 레시피 앱 설계에서 정한 것: 비밀번호 bcrypt, JWT, 리프레시 토큰 순환·재사용 감지, 로그인 실패 5회/15분 잠금(Redis, 가입 여부와 무관), 타인 데이터 접근 시 404. → v3에서 재사용.
@@ -97,4 +97,5 @@
 - [x] 에너지 오류 → 라코니코 올리브 오일 5,780 → 840kcal/100g (지방 93.33g×9)로 `corrections.csv` 보정. 900~1000kcal 기름 80건은 반올림 수준이라 그대로 둠
 - [x] 데이터 적재 완료 (2026-11-11): 324,763건, 22.7초, 재실행해도 행 수 동일, 테스트 11개 통과
 - [x] 제품 검색 완료 (2026-11-12): 인덱스 없이 중앙값 약 256~294ms (전체 스캔 두 번: COUNT + 목록), 테스트 19개 통과
+- [x] 제품 상세 완료 (2026-11-12): 식품코드(PK)로 조회 중앙값 14ms, 정보 없음은 null, 없는 코드 404, 테스트 22개 통과
 - [ ] TestClient가 `httpx` 대신 `httpx2`를 권장하는 경고가 뜸 → 바꿀지 결정 필요 (지금은 httpx 0.28.1, 동작에는 문제 없음)

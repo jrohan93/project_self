@@ -1,6 +1,7 @@
 """여러 테스트 파일이 같이 쓰는 준비물.
 
 engine: 테스트 전용 DB(TEST_DATABASE_URL)에 빈 products 테이블을 만들어 준다.
+api: 그 테스트 DB를 쓰는 FastAPI TestClient.
 MySQL이 떠 있지 않으면 그 테스트는 건너뛴다 (docker compose up -d 후 실행).
 """
 
@@ -10,8 +11,12 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from dotenv import load_dotenv
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import sessionmaker
+
+from app.main import app, get_session
 
 load_dotenv()
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -35,3 +40,17 @@ def engine():
 
     yield engine
     engine.dispose()
+
+
+@pytest.fixture
+def api(engine):
+    # 앱이 실제 DB 대신 테스트 DB를 쓰도록 세션을 바꿔 끼운다
+    TestSession = sessionmaker(engine)
+
+    def test_session():
+        with TestSession() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = test_session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
