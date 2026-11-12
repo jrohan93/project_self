@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}가공식품 영양 비교{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
+  <style>
+    /* 색은 여기 한 곳에서만 정한다. 다크 모드는 아래에서 같은 이름의 색만 바꾼다 */
+    :root {
+      --bg: #f6f7f5;
+      --card: #ffffff;
+      --text: #1d2420;
+      --muted: #6b7570;
+      --line: #e3e7e4;
+      --accent: #1f7a4d;        /* 주 색: 링크, 버튼 */
+      --accent-soft: #e6f2eb;   /* 강조한 칸 배경 */
+      --na: #9aa29e;            /* 정보 없음 */
+      --shadow: 0 1px 2px rgba(0, 0, 0, .05), 0 2px 8px rgba(0, 0, 0, .04);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121614;
+        --card: #1b201d;
+        --text: #e6ebe8;
+        --muted: #9aa5a0;
+        --line: #2c3430;
+        --accent: #5cc58f;
+        --accent-soft: #1e3328;
+        --na: #6c7570;
+        --shadow: none;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: "Noto Sans KR", system-ui, sans-serif; font-size: 15px; line-height: 1.55;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+
+    /* 머리 */
+    header { background: var(--card); border-bottom: 1px solid var(--line); }
+    header .wrap { display: flex; align-items: baseline; gap: 12px; padding-top: 14px; padding-bottom: 14px; flex-wrap: wrap; }
+    .brand { font-size: 20px; font-weight: 700; color: var(--text); }
+    .brand span { color: var(--accent); }
+    .tagline { color: var(--muted); font-size: 13px; }
+
+    main { padding-top: 20px; padding-bottom: 24px; }
+    h2 { font-size: 24px; margin: 0 0 4px; }
+    h3 { font-size: 17px; margin: 0 0 4px; }
+
+    /* 카드: 흰 상자 */
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 18px; margin-bottom: 16px; }
+    .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 13px; }
+
+    /* 검색창 */
+    .search { display: flex; gap: 8px; flex-wrap: wrap; }
+    .search input { flex: 1 1 200px; min-width: 0; }
+    /* 상세 조건 (펼치기) */
+    .filters { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+    .filters summary { cursor: pointer; color: var(--accent); font-weight: 500; }
+    .filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }
+    .filter-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+    .slider-head { display: flex; justify-content: space-between; gap: 8px; }
+    .slider output { color: var(--text); font-weight: 500; white-space: nowrap; }
+    .slider input[type=range] { width: 100%; padding: 0; border: none; background: none; accent-color: var(--accent); cursor: pointer; }
+    input, select, button {
+      font: inherit; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid var(--line); background: var(--card); color: var(--text);
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; cursor: pointer; padding: 10px 20px; }
+
+    /* 작은 동그란 표시 (기준량, 대표식품명, 예시 검색어) */
+    .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; background: var(--bg); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+    a.pill { color: var(--text); }
+    a.pill:hover { border-color: var(--accent); text-decoration: none; }
+    .pill.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+    /* 표 */
+    .table-wrap { overflow-x: auto; margin: 0 -18px; }
+    table { border-collapse: collapse; width: 100%; min-width: 720px; }
+    th, td { padding: 10px 18px; text-align: left; border-bottom: 1px solid var(--line); }
+    th { font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+    td:first-child { min-width: 200px; font-weight: 500; }  /* 제품명 */
+    td:nth-child(2) { min-width: 140px; }                    /* 회사 */
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: var(--bg); }
+    .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .hl { background: var(--accent-soft); font-weight: 700; }   /* 정렬·추천 기준이 된 칸 */
+    th.hl { color: var(--accent); }
+    .na { color: var(--na); font-weight: 400; font-size: 13px; }  /* 정보 없음 */
+
+    /* 상세: 영양성분 네 칸 */
+    .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
+    .fact { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+    .fact .label { color: var(--muted); font-size: 13px; }
+    .fact .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    @media (max-width: 640px) { .facts { grid-template-columns: repeat(2, 1fr); } }
+
+    /* 쪽 넘기기 */
+    .pager { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 14px; }
+    .pager a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 8px; }
+
+    footer { border-top: 1px solid var(--line); padding: 16px 0 28px; font-size: 13px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a class="brand" href="/">가공식품 <span>영양 비교</span></a>
+      <span class="tagline">같은 종류끼리, 같은 기준량으로 비교해요</span>
+    </div>
+  </header>
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <div class="wrap">
+      출처: 공공데이터포털 (전국통합식품영양성분정보 표준데이터).
+      영양값은 기준량(100g 또는 100ml)당 값이며, "정보 없음"은 원본에 값이 없거나 확인되지 않은 경우입니다.
+    </div>
+  </footer>
+</body>
+</html>

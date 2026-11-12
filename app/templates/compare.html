@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}{{ result.category }} {{ result.basis }} 비교 - 가공식품 영양 비교{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h2>{{ result.category }} ({{ result.basis }}당) 비교</h2>
+  <div class="pills" style="margin-top: 8px">
+    <span class="muted small">낮은 순 정렬</span>
+    {% for key, label in sort_labels.items() %}
+      {% if key == result.sort %}<span class="pill on">{{ label }}</span>
+      {% else %}<a class="pill" href="/compare?category={{ result.category | urlencode }}&basis={{ result.basis | urlencode }}&sort={{ key }}&size={{ result.size }}">{{ label }}</a>{% endif %}
+    {% endfor %}
+  </div>
+  <p class="muted small" style="margin-bottom: 0">기준량이 다른 제품({{ "100ml" if result.basis == "100g" else "100g" }})은 함께 비교하지 않아요. 정보 없는 제품은 맨 뒤에 있어요.</p>
+</section>
+
+{% if result.total == 0 %}
+  <section class="card"><p>이 종류·기준량의 제품이 없어요.</p></section>
+{% else %}
+  <section class="card">
+    <div class="card-head">
+      <h3>{{ sort_labels[result.sort] }} 낮은 순 <span class="muted small">{{ "{:,}".format(result.total) }}건 중 {{ result.page }}쪽</span></h3>
+      {% include "_size_picker.html" %}
+    </div>
+    {% set products = result.items %}
+    {% set highlight = result.sort %}
+    {% include "_product_table.html" %}
+    {% include "_pager.html" %}
+  </section>
+{% endif %}
+{% endblock %}

@@ -75,6 +75,63 @@ def test_empty_search_is_rejected(client):
     assert client.get("/api/products", params={"q": "   "}).status_code == 400
 
 
+def filtered_client(engine, api):
+    save(engine, [
+        {"food_code": "S1", "name": "샘표 양조간장", "maker": "샘표식품", "category": "간장", "basis": "100ml",
+         "energy_kcal": 60, "sodium_mg": 6000, "sugar_g": 1, "sat_fat_g": 0},
+        {"food_code": "S2", "name": "저염 진간장", "maker": "샘표식품", "category": "간장", "basis": "100ml",
+         "energy_kcal": 50, "sodium_mg": 3000, "sugar_g": 5, "sat_fat_g": 0},
+        {"food_code": "S3", "name": "국간장", "maker": "샘표식품", "category": "간장", "basis": "100g",
+         "energy_kcal": 40, "sodium_mg": 2000, "sugar_g": 0, "sat_fat_g": 0},
+        {"food_code": "S4", "name": "정보없는간장", "maker": "샘표식품", "category": "간장", "basis": "100ml",
+         "energy_kcal": None, "sodium_mg": None, "sugar_g": None, "sat_fat_g": None},
+        {"food_code": "O1", "name": "샘표 아닌 간장", "maker": "다른회사", "category": "간장", "basis": "100ml",
+         "energy_kcal": 70, "sodium_mg": 7000, "sugar_g": 2, "sat_fat_g": 0},
+    ])
+    return api
+
+
+def test_search_by_maker(engine, api):
+    client = filtered_client(engine, api)
+
+    by_maker = names(client.get("/api/products", params={"q": "샘표", "target": "maker"}))
+    by_name = names(client.get("/api/products", params={"q": "샘표"}))
+
+    assert by_maker == ["국간장", "샘표 양조간장", "저염 진간장", "정보없는간장"]  # 회사 이름에 '샘표'
+    assert by_name == ["샘표 아닌 간장", "샘표 양조간장"]  # 제품 이름에 '샘표'
+
+
+def test_max_filters_keep_only_lower_or_equal(engine, api):
+    client = filtered_client(engine, api)
+    params = {"category": "간장", "basis": "100ml"}
+
+    assert names(client.get("/api/products", params={**params, "max_sodium": 6000})) == ["샘표 양조간장", "저염 진간장"]
+    assert names(client.get("/api/products", params={**params, "max_sodium": 6000, "max_sugar": 2})) == ["샘표 양조간장"]
+    assert names(client.get("/api/products", params={**params, "max_kcal": 55})) == ["저염 진간장"]
+
+
+def test_max_filter_excludes_unknown_values(engine, api):
+    client = filtered_client(engine, api)
+
+    # 정보없는간장은 값이 NULL이라 '이하'인지 알 수 없으므로 빠진다
+    found = names(client.get("/api/products", params={"category": "간장", "max_sat_fat": 100}))
+
+    assert "정보없는간장" not in found
+    assert len(found) == 4
+
+
+def test_basis_filter(engine, api):
+    client = filtered_client(engine, api)
+
+    assert names(client.get("/api/products", params={"category": "간장", "basis": "100g"})) == ["국간장"]
+
+
+def test_invalid_search_options_are_rejected(client):
+    assert client.get("/api/products", params={"q": "간장", "target": "category"}).status_code == 422
+    assert client.get("/api/products", params={"q": "간장", "basis": "1kg"}).status_code == 422
+    assert client.get("/api/products", params={"q": "간장", "max_sodium": -1}).status_code == 422
+
+
 def test_page_size_is_limited(client):
     assert client.get("/api/products", params={"q": "간장", "size": 101}).status_code == 422
     assert client.get("/api/products", params={"q": "간장", "page": 0}).status_code == 422

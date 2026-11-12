@@ -1,0 +1,9 @@
+{# 한 쪽에 몇 개씩 볼지 고르는 링크. 바꾸면 1쪽부터 다시 본다.
+   result(size), page_sizes, page_url(쪽, 쪽 크기)가 필요하다 #}
+<div class="pills">
+  <span class="muted small">한 번에</span>
+  {% for s in page_sizes %}
+    {% if s == result.size %}<span class="pill on">{{ s }}개</span>
+    {% else %}<a class="pill" href="{{ page_url(1, s) }}">{{ s }}개</a>{% endif %}
+  {% endfor %}
+</div>

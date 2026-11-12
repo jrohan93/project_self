@@ -1,4 +1,4 @@
-"""검색·상세·비교·추천 API 응답 시간 측정. v1(인덱스 없음)과 v2(인덱스·캐시) 비교용.
+"""검색·상세·비교·추천 API와 화면의 응답 시간 측정. v1(인덱스 없음)과 v2(인덱스·캐시) 비교용.
 
 실행: python -m scripts.measure_search
 실제 DB(DATABASE_URL)를 쓴다. 네트워크를 빼고 앱 안에서 바로 호출(TestClient)해서
@@ -22,11 +22,17 @@ CASES = [
     ("이름 + 대표식품명", SEARCH, {"q": "고추장", "category": "고추장"}),
     ("대표식품명만 (큰 종류)", SEARCH, {"category": "기타 빵"}),
     ("이름 검색 50쪽", SEARCH, {"q": "간장", "page": 50}),
+    ("회사 이름 검색", SEARCH, {"q": "샘표", "target": "maker"}),
+    ("대표식품명 + 상세 조건", SEARCH, {"category": "간장", "basis": "100ml", "max_sodium": 5000, "max_sugar": 2}),
     ("제품 상세 (식품코드)", "/api/products/P107-113011300-0051", {}),
     ("같은 종류 비교 (간장)", "/api/compare", {"category": "간장", "basis": "100ml", "sort": "sodium"}),
     ("같은 종류 비교 (큰 종류)", "/api/compare", {"category": "기타 빵", "basis": "100g", "sort": "sugar"}),
     ("대체 제품 추천 (간장, 나트륨)", "/api/products/P112-004000400-0098/alternatives", {"by": "sodium"}),
     ("대체 제품 추천 (기타 빵, 당류)", "/api/products/P101-405000400-4596/alternatives", {"by": "sugar"}),
+    # 화면(HTML). 상세 화면은 상세 + 나트륨 추천 + 당류 추천을 한 번에 불러온다
+    ("화면: 검색", "/", {"q": "간장"}),
+    ("화면: 상세 (추천 2개 포함)", "/products/P112-004000400-0098", {}),
+    ("화면: 같은 종류 비교", "/compare", {"category": "간장", "basis": "100ml"}),
 ]
 
 
@@ -36,8 +42,9 @@ def main() -> None:
     print("| 경우 | 조건 | 결과 수 | 중앙값(ms) | 최댓값(ms) |")
     print("|---|---|---|---|---|")
     for label, path, params in CASES:
-        body = client.get(path, params=params).json()  # 미리 실행
-        total = body.get("total", 1)  # 상세는 1건
+        response = client.get(path, params=params)  # 미리 실행
+        # API는 JSON의 total(상세는 1건), 화면(HTML)은 결과 수를 '-'로 적는다
+        total = f'{response.json().get("total", 1):,}' if path.startswith("/api") else "-"
 
         times = []
         for _ in range(RUNS):
@@ -46,7 +53,7 @@ def main() -> None:
             times.append((time.perf_counter() - start) * 1000)
             assert response.status_code == 200
 
-        print(f"| {label} | `{path} {params}` | {total:,} | {statistics.median(times):.1f} | {max(times):.1f} |")
+        print(f"| {label} | `{path} {params}` | {total} | {statistics.median(times):.1f} | {max(times):.1f} |")
 
 
 if __name__ == "__main__":

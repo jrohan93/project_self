@@ -1,21 +1,47 @@
-"""FastAPI 앱. 실행: uvicorn app.main:app --reload"""
+"""FastAPI 앱. 실행: uvicorn app.main:app --reload
+
+/api/... 는 JSON API, 나머지(/, /products/..., /compare)는 Jinja2로 만든 HTML 화면.
+"""
 
 from collections.abc import Iterator
+from pathlib import Path
+from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.compare import Basis, SortKey, compare_products
 from app.db import make_engine
 from app.models import Product
-from app.recommend import RecommendKey, find_alternatives
+from app.recommend import RECOMMEND_COLUMNS, RecommendKey, find_alternatives
 from app.schemas import AlternativesResult, CompareResult, ProductItem, SearchResult
-from app.search import search_products
+from app.search import SearchTarget, search_products
 
 app = FastAPI(title="가공식품 영양 비교 검색")
 
 # 엔진은 앱 전체에서 하나만 만든다 (연결은 실제로 쿼리할 때 맺어짐)
 SessionLocal = sessionmaker(make_engine())
+
+PAGE_SIZES = (5, 10, 20, 30)  # 화면 한 쪽에 보여줄 제품 수 (고를 수 있는 값)
+DEFAULT_PAGE_SIZE = 20
+ALTERNATIVES_ON_DETAIL = 5  # 상세 화면에 보여줄 대체 제품 수
+
+
+def format_nutrient(value: float | None, unit: str) -> str:
+    """영양값 표시: 정보 없음(None)은 0이 아니라 글자로, 숫자는 쉼표 + 불필요한 소수점 0 제거."""
+    if value is None:
+        # 흐린 색으로 보이게 span으로 감싼다. Markup은 '이미 안전한 HTML'이라 이스케이프되지 않는다
+        return Markup('<span class="na">정보 없음</span>')
+    text = f"{value:,.2f}".rstrip("0").rstrip(".")  # 6454.00 → 6,454 / 0.40 → 0.4
+    return f"{text} {unit}"
+
+
+# 템플릿은 자동 이스케이프가 켜져 있어서 제품 이름에 <, > 같은 글자가 있어도 HTML로 실행되지 않는다
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+templates.env.filters["nutrient"] = format_nutrient
 
 
 def get_session() -> Iterator[Session]:
@@ -26,8 +52,14 @@ def get_session() -> Iterator[Session]:
 
 @app.get("/api/products", response_model=SearchResult)
 def list_products(
-    q: str = Query("", max_length=100, description="제품 이름에 들어간 글자"),
+    q: str = Query("", max_length=100, description="검색어"),
+    target: SearchTarget = Query("name", description="검색어를 찾을 곳: name(제품 이름) / maker(회사 이름)"),
     category: str | None = Query(None, max_length=50, description="대표식품명 (예: 간장)"),
+    basis: Basis | None = Query(None, description="기준량 100g / 100ml"),
+    max_kcal: float | None = Query(None, ge=0, description="칼로리 이하 (기준량당 kcal)"),
+    max_sodium: float | None = Query(None, ge=0, description="나트륨 이하 (기준량당 mg)"),
+    max_sugar: float | None = Query(None, ge=0, description="당류 이하 (기준량당 g)"),
+    max_sat_fat: float | None = Query(None, ge=0, description="포화지방 이하 (기준량당 g)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_session),
@@ -37,7 +69,11 @@ def list_products(
         # 조건 없이 33만 건 전체를 정렬하는 요청은 받지 않는다
         raise HTTPException(status_code=400, detail="검색어나 대표식품명 중 하나는 입력해 주세요.")
 
-    total, products = search_products(session, q, category, page, size)
+    # 값을 넣은 상한 조건만 넘긴다
+    limits = {"max_kcal": max_kcal, "max_sodium": max_sodium, "max_sugar": max_sugar, "max_sat_fat": max_sat_fat}
+    max_values = {key: value for key, value in limits.items() if value is not None}
+
+    total, products = search_products(session, q, category, page, size, target, basis, max_values)
     return SearchResult(
         total=total,
         page=page,
@@ -93,4 +129,142 @@ def compare(
         page=page,
         size=size,
         items=[ProductItem.model_validate(p) for p in products],
+    )
+
+
+# ---------------- 화면 (HTML) ----------------
+# API와 같은 함수(search_products, compare_products, find_alternatives)를 쓰고, 결과를 템플릿에 넘긴다.
+
+SORT_LABELS = {"sodium": "나트륨", "sugar": "당류", "sat_fat": "포화지방"}
+
+# 화면 검색어를 어디서 찾을지: 값 → 화면 이름
+SCREEN_TARGETS = {"name": "제품 이름", "category": "대표식품명", "maker": "회사 이름"}
+
+# 화면의 '상세 조건' 드래그바: (파라미터 이름, 화면 이름, 단위, 맨 오른쪽 값, 한 칸)
+# 맨 오른쪽 값까지 끌어 두면 '제한 없음'이다 (기준량 100g·100ml당 값)
+MAX_FIELDS = [
+    ("max_kcal", "칼로리", "kcal", 900, 10),
+    ("max_sodium", "나트륨", "mg", 8000, 100),
+    ("max_sugar", "당류", "g", 100, 1),
+    ("max_sat_fat", "포화지방", "g", 50, 0.5),
+]
+SLIDER_TOPS = {key: top for key, _, _, top, _ in MAX_FIELDS}
+
+
+def parse_limit(text: str, top: float) -> float | None:
+    """화면 폼의 상한 값. 비어 있거나 숫자가 아니거나 음수거나
+    드래그바 맨 오른쪽(top) 이상이면 '조건 없음'(None)."""
+    try:
+        value = float(text)
+    except ValueError:  # 빈칸("")도 여기로 온다
+        return None
+    return value if 0 <= value < top else None
+
+
+@app.get("/", response_class=HTMLResponse)
+def search_page(
+    request: Request,
+    q: str = Query("", max_length=100),
+    # 검색어 칸은 하나이고, 어디서 찾을지만 고른다: 제품 이름 / 대표식품명 / 회사 이름
+    target: str = Query("name"),
+    basis: str = Query(""),
+    # 폼에서 빈 칸은 빈 글자("")로 오므로 숫자가 아니라 글자로 받아 parse_limit으로 바꾼다
+    max_kcal: str = Query("", max_length=20),
+    max_sodium: str = Query("", max_length=20),
+    max_sugar: str = Query("", max_length=20),
+    max_sat_fat: str = Query("", max_length=20),
+    page: int = Query(1, ge=1),
+    size: int = Query(DEFAULT_PAGE_SIZE),
+    session: Session = Depends(get_session),
+):
+    q = q.strip()
+    size = size if size in PAGE_SIZES else DEFAULT_PAGE_SIZE
+    target = target if target in SCREEN_TARGETS else "name"
+    basis = basis if basis in ("100g", "100ml") else ""
+    texts = {"max_kcal": max_kcal, "max_sodium": max_sodium, "max_sugar": max_sugar, "max_sat_fat": max_sat_fat}
+    max_values = {key: parse_limit(text, SLIDER_TOPS[key]) for key, text in texts.items()}
+    max_values = {key: value for key, value in max_values.items() if value is not None}
+
+    result = None  # 검색어가 없으면 검색창만 보여준다
+    if q:
+        if target == "category":
+            # 대표식품명은 정확히 같은 것만 (참치 → 참치김밥이 섞이지 않게)
+            total, products = search_products(session, "", q, page, size, "name", basis or None, max_values)
+        else:
+            total, products = search_products(session, q, None, page, size, target, basis or None, max_values)
+        result = SearchResult(
+            total=total, page=page, size=size,
+            items=[ProductItem.model_validate(p) for p in products],
+        )
+
+    # 지금 조건 그대로 쪽(과 쪽 크기)만 바꾼 주소 (비어 있는 조건은 주소에서 뺀다)
+    params = {"q": q, "target": target, "basis": basis,
+              **{key: f"{value:g}" for key, value in max_values.items()}}
+    params = {key: value for key, value in params.items() if value}
+
+    def page_url(n: int, page_size: int = size) -> str:
+        return "/?" + urlencode({**params, "page": n, "size": page_size})
+
+    return templates.TemplateResponse(
+        request, "search.html",
+        {"q": q, "target": target, "screen_targets": SCREEN_TARGETS, "basis": basis,
+         "max_values": max_values, "max_fields": MAX_FIELDS,
+         "result": result, "page_url": page_url, "page_sizes": PAGE_SIZES},
+    )
+
+
+@app.get("/products/{food_code}", response_class=HTMLResponse)
+def detail_page(request: Request, food_code: str, session: Session = Depends(get_session)):
+    product = session.get(Product, food_code)
+    if product is None:
+        return templates.TemplateResponse(request, "not_found.html", {}, status_code=404)
+
+    alternatives = []
+    for by, label, subject, note in [
+        ("sodium", "나트륨", "나트륨이", ""),
+        ("sugar", "당류", "당류가", " (나트륨이 이 제품보다 높은 제품은 뺐어요)"),
+    ]:
+        total, items = find_alternatives(session, product, by, ALTERNATIVES_ON_DETAIL)
+        alternatives.append({
+            "key": by,  # 표에서 강조할 칸
+            "label": label,
+            "subject": subject,  # 제목용 (조사가 달라서 따로 둔다)
+            "note": note,
+            "base_value": getattr(product, RECOMMEND_COLUMNS[by].key),  # None이면 '찾을 수 없음' 안내
+            "total": total,
+            # 'items'라고 하면 템플릿에서 딕셔너리의 .items() 메서드와 헷갈리므로 products로 둔다
+            "products": [ProductItem.model_validate(p) for p in items],
+        })
+
+    return templates.TemplateResponse(
+        request, "detail.html",
+        {"product": ProductItem.model_validate(product), "alternatives": alternatives},
+    )
+
+
+@app.get("/compare", response_class=HTMLResponse)
+def compare_page(
+    request: Request,
+    category: str = Query(..., min_length=1, max_length=50),
+    basis: Basis = Query(...),
+    sort: SortKey = Query("sodium"),
+    page: int = Query(1, ge=1),
+    size: int = Query(DEFAULT_PAGE_SIZE),
+    session: Session = Depends(get_session),
+):
+    size = size if size in PAGE_SIZES else DEFAULT_PAGE_SIZE
+    total, products = compare_products(session, category, basis, sort, page, size)
+    result = CompareResult(
+        category=category, basis=basis, sort=sort, total=total, page=page, size=size,
+        items=[ProductItem.model_validate(p) for p in products],
+    )
+
+    def page_url(n: int, page_size: int = size) -> str:
+        return "/compare?" + urlencode(
+            {"category": category, "basis": basis, "sort": sort, "page": n, "size": page_size}
+        )
+
+    return templates.TemplateResponse(
+        request, "compare.html",
+        {"result": result, "sort_labels": SORT_LABELS, "page_url": page_url, "page_sizes": PAGE_SIZES},
     )

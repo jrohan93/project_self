@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+  <form action="/" method="get">
+    {# 새로 검색해도 고른 쪽 크기는 유지한다 #}
+    {% if result %}<input type="hidden" name="size" value="{{ result.size }}">{% endif %}
+    <div class="search">
+      <select name="target" aria-label="검색할 곳">
+        {% for value, label in screen_targets.items() %}
+        <option value="{{ value }}" {{ "selected" if target == value }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input type="search" name="q" value="{{ q }}" placeholder="검색어 (예: 간장, 순한간장, 샘표)" maxlength="100" aria-label="검색어">
+      <button type="submit">검색</button>
+    </div>
+
+    {# 상세 조건: 하나라도 넣었으면 펼친 채로 보여준다 #}
+    <details class="filters" {{ "open" if basis or max_values }}>
+      <summary>상세 조건 (칼로리·나트륨·당류·포화지방)</summary>
+      <div class="filter-grid">
+        <label>기준량
+          <select name="basis">
+            <option value="" {{ "selected" if not basis }}>전체</option>
+            <option value="100g" {{ "selected" if basis == "100g" }}>100g당</option>
+            <option value="100ml" {{ "selected" if basis == "100ml" }}>100ml당</option>
+          </select>
+        </label>
+        {% for key, label, unit, top, step in max_fields %}
+        <label class="slider">
+          <span class="slider-head">{{ label }}
+            {# 지금 값: 맨 오른쪽이면 '제한 없음' (아래 스크립트가 끌 때마다 바꾼다) #}
+            <output data-unit="{{ unit }}">{{ "{:,g} {} 이하".format(max_values[key], unit) if key in max_values else "제한 없음" }}</output>
+          </span>
+          <input type="range" name="{{ key }}" min="0" max="{{ top }}" step="{{ step }}"
+                 value="{{ '{:g}'.format(max_values.get(key, top)) }}" aria-label="{{ label }} 상한">
+        </label>
+        {% endfor %}
+      </div>
+      <p class="muted small" style="margin: 10px 0 0">기준량(100g 또는 100ml)당 값으로 걸러요. 맨 오른쪽은 제한 없음이에요. 조건을 넣은 영양값이 "정보 없음"인 제품은 조건에 맞는지 알 수 없어 빠져요.</p>
+    </details>
+  </form>
+  <script>
+    // 드래그바를 끌면 옆의 값 글자를 바꾼다. 맨 오른쪽이면 '제한 없음'
+    const sliders = document.querySelectorAll(".slider input[type=range]");
+    for (const slider of sliders) {
+      const output = slider.closest(".slider").querySelector("output");
+      slider.addEventListener("input", () => {
+        const atTop = Number(slider.value) >= Number(slider.max);
+        output.textContent = atTop ? "제한 없음" : `${Number(slider.value).toLocaleString("ko-KR")} ${output.dataset.unit} 이하`;
+      });
+    }
+    // 맨 오른쪽 값도 폼으로 보내지지만, 서버(parse_limit)가 '조건 없음'으로 본다
+  </script>
+
+  {% if result is none %}
+  <div class="pills" style="margin-top: 12px">
+    <span class="muted small">대표식품명으로 찾아보기</span>
+    {% for example in ["간장", "고추장", "된장", "배추김치", "참기름", "어묵"] %}
+      <a class="pill" href="/?target=category&q={{ example | urlencode }}">{{ example }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+{% if result is none %}
+  <p class="muted">
+    <strong>제품 이름</strong>은 이름에 검색어가 들어간 제품을 모두 찾아요("간장" → 간장게장, 장아찌간장도 나옴).
+    <strong>대표식품명</strong>은 "간장", "고추장", "배추김치"처럼 같은 종류로 묶인 제품만 정확히 찾아요("참치"로 찾아도 참치김밥은 안 나옴).
+  </p>
+{% elif result.total == 0 %}
+  <section class="card"><p>검색 결과가 없어요.</p></section>
+{% else %}
+  <section class="card">
+    <div class="card-head">
+      <h3>검색 결과 <span class="muted small">{{ "{:,}".format(result.total) }}건 중 {{ result.page }}쪽</span></h3>
+      {% include "_size_picker.html" %}
+    </div>
+    {% set products = result.items %}
+    {% include "_product_table.html" %}
+    {% include "_pager.html" %}
+  </section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,29 @@
+{# 제품 목록 표. 검색·비교·추천 화면에서 같이 쓴다.
+   products: ProductItem 목록, highlight: 강조할 영양값 칸 ("sodium" / "sugar" / "sat_fat", 없으면 강조 안 함) #}
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>제품</th><th>회사</th><th>대표식품명</th><th>기준량</th>
+      <th class="num">칼로리</th>
+      <th class="num {{ 'hl' if highlight == 'sodium' }}">나트륨</th>
+      <th class="num {{ 'hl' if highlight == 'sugar' }}">당류</th>
+      <th class="num {{ 'hl' if highlight == 'sat_fat' }}">포화지방</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in products %}
+    <tr>
+      <td><a href="/products/{{ p.food_code }}">{{ p.name }}</a></td>
+      <td>{% if p.maker %}{{ p.maker }}{% else %}<span class="na">정보 없음</span>{% endif %}</td>
+      <td>{{ p.category }}</td>
+      <td><span class="pill">{{ p.basis }}</span></td>
+      <td class="num">{{ p.energy_kcal | nutrient("kcal") }}</td>
+      <td class="num {{ 'hl' if highlight == 'sodium' }}">{{ p.sodium_mg | nutrient("mg") }}</td>
+      <td class="num {{ 'hl' if highlight == 'sugar' }}">{{ p.sugar_g | nutrient("g") }}</td>
+      <td class="num {{ 'hl' if highlight == 'sat_fat' }}">{{ p.sat_fat_g | nutrient("g") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>

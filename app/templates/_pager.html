@@ -1,0 +1,7 @@
+{# 이전·다음 쪽 링크. result(total·page·size)와 page_url(쪽 번호 → 주소)이 필요하다 #}
+{% set last_page = (result.total + result.size - 1) // result.size %}
+<nav class="pager">
+  {% if result.page > 1 %}<a href="{{ page_url(result.page - 1) }}">← 이전</a>{% endif %}
+  <span class="muted small">{{ result.page }} / {{ "{:,}".format(last_page) }}</span>
+  {% if result.page < last_page %}<a href="{{ page_url(result.page + 1) }}">다음 →</a>{% endif %}
+</nav>

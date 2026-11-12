@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.name }} - 가공식품 영양 비교{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h2>{{ product.name }}</h2>
+  <div class="pills">
+    <span class="muted">{{ product.maker or "회사 정보 없음" }}</span>
+    <a class="pill" href="/?target=category&q={{ product.category | urlencode }}">{{ product.category }}</a>
+    <span class="pill">{{ product.basis }}당</span>
+    <span class="muted small">식품코드 {{ product.food_code }}</span>
+  </div>
+
+  <h3 style="margin-top: 16px">영양성분 ({{ product.basis }}당)</h3>
+  <div class="facts">
+    <div class="fact"><div class="label">칼로리</div><div class="value">{{ product.energy_kcal | nutrient("kcal") }}</div></div>
+    <div class="fact"><div class="label">나트륨</div><div class="value">{{ product.sodium_mg | nutrient("mg") }}</div></div>
+    <div class="fact"><div class="label">당류</div><div class="value">{{ product.sugar_g | nutrient("g") }}</div></div>
+    <div class="fact"><div class="label">포화지방</div><div class="value">{{ product.sat_fat_g | nutrient("g") }}</div></div>
+  </div>
+  <p style="margin-bottom: 0">
+    <a href="/compare?category={{ product.category | urlencode }}&basis={{ product.basis | urlencode }}">
+      같은 종류({{ product.category }}, {{ product.basis }}) 전체 비교 보기 →
+    </a>
+  </p>
+</section>
+
+{# 대체 제품: 나트륨 기준, 당류 기준 두 묶음 #}
+{% for alt in alternatives %}
+<section class="card">
+  <div class="card-head">
+    <h3>{{ alt.subject }} 더 낮은 {{ product.category }} ({{ product.basis }})</h3>
+    {% if alt.total %}<span class="muted small">{{ "{:,}".format(alt.total) }}개 중 가장 낮은 {{ alt.products | length }}개{{ alt.note }}</span>{% endif %}
+  </div>
+  {% if alt.base_value is none %}
+    <p class="muted">이 제품은 {{ alt.label }} 정보가 없어서 더 낮은 제품을 찾을 수 없어요.</p>
+  {% elif alt.total == 0 %}
+    <p class="muted">같은 종류 안에서 {{ alt.subject }} 더 낮은 제품이 없어요.</p>
+  {% else %}
+    {% set products = alt.products %}
+    {% set highlight = alt.key %}
+    {% include "_product_table.html" %}
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}
