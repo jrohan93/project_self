@@ -23,6 +23,7 @@ CASES = [
     ("대표식품명만 (큰 종류)", SEARCH, {"category": "기타 빵"}),
     ("이름 검색 50쪽", SEARCH, {"q": "간장", "page": 50}),
     ("회사 이름 검색", SEARCH, {"q": "샘표", "target": "maker"}),
+    ("한 글자 검색 (FULLTEXT 못 씀 → LIKE)", SEARCH, {"q": "김"}),
     ("대표식품명 + 상세 조건", SEARCH, {"category": "간장", "basis": "100ml", "max_sodium": 5000, "max_sugar": 2}),
     ("제품 상세 (식품코드)", "/api/products/P107-113011300-0051", {}),
     ("같은 종류 비교 (간장)", "/api/compare", {"category": "간장", "basis": "100ml", "sort": "sodium"}),

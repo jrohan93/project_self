@@ -74,19 +74,19 @@
 | 경로 | 내용 |
 |---|---|
 | `app/db.py` | `.env`의 `DATABASE_URL`로 엔진 생성 |
-| `app/models.py` | `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). v2 인덱스 3개: (category, basis, sodium_mg / sugar_g / sat_fat_g), alembic `0002` |
+| `app/models.py` | `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). v2 인덱스 3개: (category, basis, sodium_mg / sugar_g / sat_fat_g), alembic `0002`. FULLTEXT ngram `ft_products_name`·`ft_products_maker`, alembic `0003` (불용어 끄고 만듦) |
 | `app/main.py` | FastAPI 앱. API: `GET /api/products` (검색), `GET /api/products/{식품코드}` (상세, 없으면 404), `.../alternatives` (추천), `GET /api/compare` (같은 종류 비교). 화면: `/` (검색), `/products/{식품코드}` (상세 + 추천 5개씩), `/compare`. `format_nutrient` 필터로 NULL은 "정보 없음". 실행 `uvicorn app.main:app --reload` |
 | `app/templates/` | Jinja2 템플릿. `base.html`(공통 스타일: `:root` 색 변수 + 다크 모드, 카드형, 기준 칸 강조 `.hl`, 정보 없음 `.na`. "출처: 공공데이터포털" 표시), `search`·`detail`·`compare`·`not_found`, 공통 조각 `_product_table`·`_pager`·`_size_picker` |
 | `.claude/launch.json` | 브라우저 미리보기용 서버 설정 (uvicorn 8000번) |
 | `app/recommend.py` | 대체 제품 추천: 같은 (대표식품명, 기준량)에서 나트륨 또는 당류가 기준 제품보다 낮은 제품, 낮은 순(당류로 찾을 때는 나트륨이 더 높은 것 제외). 기준 값이 NULL이면 빈 목록. API는 `GET /api/products/{식품코드}/alternatives?by=sodium|sugar&limit=10` |
 | `app/compare.py` | 같은 종류 비교: (대표식품명, 기준량) 묶음을 나트륨·당류·포화지방 낮은 순, NULL은 `IS NULL`로 맨 뒤 |
-| `app/search.py` | 검색: 제품 이름 또는 회사 이름(`target`) `LIKE` + 대표식품명·기준량 필터 + 영양값 이하 조건(`max_kcal`·`max_sodium`·`max_sugar`·`max_sat_fat`, NULL은 제외) + 이름·식품코드순 + 쪽 나누기 |
+| `app/search.py` | 검색: 제품 이름 또는 회사 이름(`target`) — `text_condition`: 2글자 이상 낱말이면 FULLTEXT `MATCH` + `LIKE`(결과는 LIKE와 같음), 한 글자·부호로 끊긴 검색어나 대표식품명이 있을 때는 `LIKE`만 + 대표식품명·기준량 필터 + 영양값 이하 조건(`max_kcal`·`max_sodium`·`max_sugar`·`max_sat_fat`, NULL은 제외) + 이름·식품코드순 + 쪽 나누기 |
 | `app/schemas.py` | 응답 모양 (pydantic). 영양값은 float, 없으면 null |
 | `scripts/measure_search.py` | 검색·상세·비교·추천 응답 시간 측정 (README "성능 기록"). `python -m scripts.measure_search` |
 | `app/loader.py` | 적재: CSV → 보정 → 칼럼 정리 → 중복 합치기 → `ON DUPLICATE KEY UPDATE`. `python -m app.loader` |
 | `alembic/` | 마이그레이션. `alembic.ini`는 **ASCII만** (Windows에서 cp949로 읽혀 한글이 있으면 깨짐) |
 | `docker-compose.yml`, `docker/mysql-init.sql` | MySQL 8.4 + 테스트 DB `nutrition_test` |
-| `tests/` | `pytest`. `test_indexes.py`는 인덱스 존재·EXPLAIN 확인. DB 테스트는 `TEST_DATABASE_URL` 사용(준비물 `engine`·`api`는 `conftest.py`), MySQL 꺼져 있으면 skip |
+| `tests/` | `pytest`. `test_indexes.py`는 인덱스 존재·EXPLAIN 확인. 마이그레이션은 실행마다 한 번(`migrated_engine`, session), 테스트마다 `TRUNCATE`. DB 테스트는 `TEST_DATABASE_URL` 사용(준비물 `engine`·`api`는 `conftest.py`), MySQL 꺼져 있으면 skip |
 
 ## 이전 경험에서 가져올 것
 - 이전 레시피 앱 설계에서 정한 것: 비밀번호 bcrypt, JWT, 리프레시 토큰 순환·재사용 감지, 로그인 실패 5회/15분 잠금(Redis, 가입 여부와 무관), 타인 데이터 접근 시 404. → v3에서 재사용.
@@ -113,7 +113,8 @@
 - [x] 상세 조건 드래그바 (2026-11-12, 사용자 요청): 숫자 칸 → `type=range`. 칼로리 0~900·나트륨 0~8,000·당류 0~100·포화지방 0~50(100g·100ml당), **맨 오른쪽 = 제한 없음**(서버 `parse_limit`이 맨 오른쪽 이상을 None으로). 지금 값 표시용 짧은 스크립트만, 라이브러리 없음. API는 숫자 그대로. 테스트 62개 통과
 - **v1 완료** → 다음은 v2 성능 (인덱스, FULLTEXT ngram, Redis 캐시). 상세 화면 504ms가 가장 큰 개선 대상
 - [x] v2 1단계 (대표식품명, 기준량, 영양값) 인덱스 (2026-11-12): 상세 화면 466→30ms, 비교(간장) 224→20ms, 추천(간장) 237→21ms, 큰 종류(기타 빵) 비교 278→85ms. 이름·회사 검색은 `LIKE '%q%'`라 그대로(약 265ms) → 2단계 FULLTEXT 대상. 인덱스 55.7MB, 다시 적재 22.7→24.2초. 테스트 65개 통과 (`test_indexes.py`)
-- [ ] v2 2단계 FULLTEXT ngram (한 글자 검색 처리 방법 정해야 함), 3단계 Redis 캐시 (캐시 지우는 시점 정해야 함)
+- [x] v2 2단계 FULLTEXT ngram (2026-11-13): 이름 검색 간장 263→78ms·라코니코 261→17ms, 회사 검색 262→19ms. 한 글자·부호 검색은 LIKE(김 347ms), FULLTEXT + LIKE로 결과는 LIKE와 동일(무작위 1,000개 검증 차이 0). 불용어 OFF로 생성(영어 이름 누락 방지). 대표식품명이 있으면 FULLTEXT 안 씀(썼더니 23→101ms로 느려짐). 테스트 76개 통과
+- [ ] v2 3단계 Redis 캐시 (캐시 지우는 시점 정해야 함). 남은 느린 곳: 큰 종류(약 1만 행) 비교·추천·검색 75~85ms, 결과 많은 이름 검색 약 80ms, 한 글자 검색 347ms
 - [x] 간장 100ml 중 나트륨 1,000mg 미만 13건(중앙값 약 6,000mg) → 0건 (2026-11-12)
   - 7건 보정: 풍성한진간장·이금기 해선간장·니비시 사시미간장·금패사시미·야마사·옛장·오복양조. 금패·야마사는 1회 제공량(5ml/15ml) 값이 들어간 경우라 환산
   - 6건은 근거를 못 찾아 나트륨을 NULL로 (사용자 결정): 햄프국간장·청정원5년숙성·해천 해선간장·다화당 조선간장·한식조선간장·ICHIBIKI 사시미용. 그중 에너지 5~9kcal로 1회분 값처럼 보이는 3건(청정원·해천·ICHIBIKI)은 에너지·당류도 NULL

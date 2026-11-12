@@ -1,4 +1,4 @@
-"""v2 인덱스 테스트: 마이그레이션이 인덱스를 만들고, 비교·추천 쿼리가 그 인덱스를 쓰는지 확인한다."""
+"""v2 인덱스 테스트: 마이그레이션이 인덱스를 만들고, 비교·추천·이름 검색 쿼리가 그 인덱스를 쓰는지 확인한다."""
 
 from sqlalchemy import inspect, text
 
@@ -39,3 +39,24 @@ def test_compare_query_reads_only_one_group(engine):
 
     assert plan["type"] != "ALL"
     assert plan["key"].startswith("ix_products_category_basis_")
+
+
+def test_migration_creates_ngram_fulltext_indexes(engine):
+    with engine.connect() as conn:
+        create_sql = conn.execute(text("SHOW CREATE TABLE products")).one()[1]
+
+    assert "FULLTEXT KEY `ft_products_name` (`name`) /*!50100 WITH PARSER `ngram` */" in create_sql
+    assert "FULLTEXT KEY `ft_products_maker` (`maker`) /*!50100 WITH PARSER `ngram` */" in create_sql
+
+
+def test_name_search_uses_fulltext_index(engine):
+    save(engine, [{"food_code": f"N{i}", "name": f"제품{i} 양조간장", "maker": None, "category": "간장",
+                   "basis": "100ml", "energy_kcal": 1, "sodium_mg": 1, "sugar_g": 1, "sat_fat_g": 1} for i in range(20)])
+
+    with engine.connect() as conn:
+        plan = conn.execute(text(
+            "EXPLAIN SELECT * FROM products WHERE MATCH(name) AGAINST('\"간장\"' IN BOOLEAN MODE) AND name LIKE '%간장%'"
+        )).mappings().one()
+
+    assert plan["type"] == "fulltext"
+    assert plan["key"] == "ft_products_name"

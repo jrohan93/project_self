@@ -39,4 +39,8 @@ class Product(Base):
         Index("ix_products_category_basis_sodium", "category", "basis", "sodium_mg"),
         Index("ix_products_category_basis_sugar", "category", "basis", "sugar_g"),
         Index("ix_products_category_basis_sat_fat", "category", "basis", "sat_fat_g"),
+        # v2 2단계 (alembic 0003): 이름·회사 이름 중간에 든 검색어를 찾는 FULLTEXT 인덱스.
+        # ngram 파서는 글자를 2글자씩 잘라 색인한다 (양조간장 → 양조, 조간, 간장)
+        Index("ft_products_name", "name", mysql_prefix="FULLTEXT", mysql_with_parser="ngram"),
+        Index("ft_products_maker", "maker", mysql_prefix="FULLTEXT", mysql_with_parser="ngram"),
     )

@@ -135,3 +135,51 @@ def test_invalid_search_options_are_rejected(client):
 def test_page_size_is_limited(client):
     assert client.get("/api/products", params={"q": "간장", "size": 101}).status_code == 422
     assert client.get("/api/products", params={"q": "간장", "page": 0}).status_code == 422
+
+
+# --- v2 2단계: FULLTEXT ngram 검색 (결과는 LIKE '%q%'와 같아야 한다) ---
+
+def fulltext_client(engine, api):
+    save(engine, [
+        {"food_code": f"F{i}", "name": name, "maker": maker, "category": "기타", "basis": "100g",
+         "energy_kcal": 1, "sodium_mg": 1, "sugar_g": 1, "sat_fat_g": 1}
+        for i, (name, maker) in enumerate([
+            ("1.6자연숙성양조간장", "샘표식품"),
+            ("ICHIBIKI 사시미간장", "(주)이치비키코리아"),
+            ("Coca-Cola 제로", "코카콜라음료"),
+            ("Coca 초콜릿 Cola", "다른회사"),
+            ("김자반", "바다식품"),
+            ("양조 간장", "샘표식품"),
+        ])
+    ])
+    return api
+
+
+@pytest.mark.parametrize("q, expected", [
+    ("간장", ["1.6자연숙성양조간장", "ICHIBIKI 사시미간장", "양조 간장"]),  # 이름 중간·끝
+    ("조간", ["1.6자연숙성양조간장"]),             # 낱말 중간 두 글자 ("양조 간장"은 띄어 써서 아님)
+    ("ichibiki", ["ICHIBIKI 사시미간장"]),          # 영어는 대소문자 상관없이 (불용어를 끈 덕분에 'ch','hi' 등이 색인됨)
+    ("양조 간장", ["양조 간장"]),                   # 띄어쓰기까지 그대로
+    ("Coca-Cola", ["Coca-Cola 제로"]),              # 부호가 있으면 LIKE로 ('Coca 초콜릿 Cola'는 아님)
+    ("1.6", ["1.6자연숙성양조간장"]),               # 2글자가 안 되는 조각뿐이면 LIKE로
+    ("김", ["김자반"]),                             # 한 글자도 LIKE로 찾는다
+])
+def test_fulltext_search_gives_same_results_as_like(engine, api, q, expected):
+    client = fulltext_client(engine, api)
+
+    assert names(client.get("/api/products", params={"q": q})) == expected
+
+
+def test_fulltext_maker_search(engine, api):
+    client = fulltext_client(engine, api)
+
+    assert names(client.get("/api/products", params={"q": "샘표", "target": "maker"})) == ["1.6자연숙성양조간장", "양조 간장"]
+    assert names(client.get("/api/products", params={"q": "(주)", "target": "maker"})) == ["ICHIBIKI 사시미간장"]
+
+
+def test_name_search_inside_category_gives_same_results(engine, api):
+    # 대표식품명이 있으면 FULLTEXT 대신 LIKE를 쓰지만 결과는 같아야 한다
+    client = fulltext_client(engine, api)
+    save(engine, [product("C1", "태양초 고추장 소스", "소스"), product("C2", "찹쌀 고추장", "고추장")])
+
+    assert names(client.get("/api/products", params={"q": "고추장", "category": "고추장"})) == ["찹쌀 고추장"]
