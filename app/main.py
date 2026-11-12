@@ -5,9 +5,10 @@ from collections.abc import Iterator
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.compare import Basis, SortKey, compare_products
 from app.db import make_engine
 from app.models import Product
-from app.schemas import ProductItem, SearchResult
+from app.schemas import CompareResult, ProductItem, SearchResult
 from app.search import search_products
 
 app = FastAPI(title="가공식품 영양 비교 검색")
@@ -51,3 +52,24 @@ def get_product(food_code: str, session: Session = Depends(get_session)) -> Prod
     if product is None:
         raise HTTPException(status_code=404, detail="해당 제품이 없어요.")
     return ProductItem.model_validate(product)
+
+
+@app.get("/api/compare", response_model=CompareResult)
+def compare(
+    category: str = Query(..., min_length=1, max_length=50, description="대표식품명 (예: 간장)"),
+    basis: Basis = Query(..., description="기준량. 같은 기준량끼리만 비교한다"),
+    sort: SortKey = Query("sodium", description="낮은 순으로 정렬할 영양값"),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_session),
+) -> CompareResult:
+    total, products = compare_products(session, category, basis, sort, page, size)
+    return CompareResult(
+        category=category,
+        basis=basis,
+        sort=sort,
+        total=total,
+        page=page,
+        size=size,
+        items=[ProductItem.model_validate(p) for p in products],
+    )

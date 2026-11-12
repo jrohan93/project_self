@@ -44,6 +44,7 @@ def apply_corrections(raw: pd.DataFrame, corrections: pd.DataFrame) -> pd.DataFr
     """corrections.csv의 수정값을 덮어쓴다.
 
     원래값이 지금 데이터와 다르면(데이터를 새로 받아서 바뀐 경우) 잘못 덮어쓰지 않게 멈춘다.
+    수정값 칸이 비어 있으면 NaN으로 읽히므로 그 값은 '정보 없음'(NULL)이 된다.
     """
     df = raw.set_index("식품코드")  # 새 DataFrame이 만들어지므로 원본은 바뀌지 않는다
     for row in corrections.itertuples(index=False):

@@ -24,3 +24,10 @@ class SearchResult(BaseModel):
     page: int
     size: int
     items: list[ProductItem]
+
+
+class CompareResult(SearchResult):
+    # 어떤 묶음을 무엇으로 정렬했는지 함께 돌려준다
+    category: str
+    basis: str
+    sort: str

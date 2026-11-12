@@ -1,4 +1,4 @@
-"""검색·상세 API 응답 시간 측정. v1(인덱스 없음)과 v2(인덱스·캐시) 비교용.
+"""검색·상세·비교 API 응답 시간 측정. v1(인덱스 없음)과 v2(인덱스·캐시) 비교용.
 
 실행: python -m scripts.measure_search
 실제 DB(DATABASE_URL)를 쓴다. 네트워크를 빼고 앱 안에서 바로 호출(TestClient)해서
@@ -23,6 +23,8 @@ CASES = [
     ("대표식품명만 (큰 종류)", SEARCH, {"category": "기타 빵"}),
     ("이름 검색 50쪽", SEARCH, {"q": "간장", "page": 50}),
     ("제품 상세 (식품코드)", "/api/products/P107-113011300-0051", {}),
+    ("같은 종류 비교 (간장)", "/api/compare", {"category": "간장", "basis": "100ml", "sort": "sodium"}),
+    ("같은 종류 비교 (큰 종류)", "/api/compare", {"category": "기타 빵", "basis": "100g", "sort": "sugar"}),
 ]
 
 

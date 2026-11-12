@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from app.loader import apply_corrections, drop_duplicates, to_products, to_records
+from app.loader import apply_corrections, drop_duplicates, read_csv, to_products, to_records
 
 
 def raw_row(code, *, name="양조간장", mfr="샘표", impt="해당없음", basis="100ml",
@@ -52,6 +52,17 @@ def test_correction_overwrites_value():
     fixed = apply_corrections(raw, corrections_df("A", "나트륨(mg)", "383000", "383"))
     assert to_products(fixed).loc[0, "sodium_mg"] == 383
     assert raw.loc[0, "나트륨(mg)"] == "383000"  # 원본은 그대로
+
+
+def test_blank_correction_makes_value_null(tmp_path):
+    # corrections.csv에서 수정값 칸을 비우면 '정보 없음'(NULL)으로 바뀐다
+    path = tmp_path / "corrections.csv"
+    path.write_text("식품코드,식품명,칼럼,원래값,수정값,근거\nA,간장,나트륨(mg),2,,근거 없음\n", encoding="utf-8")
+    raw = raw_df(raw_row("A", sodium="2"))
+
+    fixed = apply_corrections(raw, read_csv(str(path)))
+
+    assert to_records(to_products(fixed))[0]["sodium_mg"] is None
 
 
 def test_correction_stops_when_original_value_changed():
