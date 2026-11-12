@@ -10,5 +10,10 @@ PyMySQL==1.2.4
 cryptography==50.0.2  # MySQL 8 기본 로그인 방식(caching_sha2_password)에 필요
 alembic==1.20.1
 
+# 웹 API
+fastapi==0.162.5
+uvicorn==0.54.0      # FastAPI 앱을 실행하는 서버
+
 # 테스트
 pytest==9.2.0
+httpx==0.28.1        # FastAPI TestClient가 사용
