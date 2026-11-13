@@ -1,6 +1,6 @@
 """여러 테스트 파일이 같이 쓰는 준비물.
 
-engine: 테스트 전용 DB(TEST_DATABASE_URL)에 빈 products·users 테이블을 만들어 준다.
+engine: 테스트 전용 DB(TEST_DATABASE_URL)에 빈 products·users·refresh_tokens 테이블을 만들어 준다.
         마이그레이션은 테스트 실행마다 한 번만 처음부터 다시 적용하고(FULLTEXT 인덱스 만들기가 느려서),
         테스트마다 DELETE로 테이블만 비운다.
 api: 그 테스트 DB를 쓰는 FastAPI TestClient.
@@ -71,7 +71,7 @@ def engine(migrated_engine):
     """
     with migrated_engine.begin() as conn:
         conn.execute(text("DELETE FROM products"))
-        conn.execute(text("DELETE FROM users"))
+        conn.execute(text("DELETE FROM users"))  # refresh_tokens는 외래 키 CASCADE로 같이 지워진다
     return migrated_engine
 
 

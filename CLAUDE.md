@@ -85,20 +85,21 @@
 - 명백한 오류 목록(나트륨 > 39,300mg/100 9건, 당류 > 탄수화물 4건, 포화지방 > 지방 22건)은 `reports/data_issues.csv`.
 - **중복 규칙 (2026-11-11 결정)**: 식품명 + 업체 + 기준량 + 에너지·나트륨·당류·포화지방이 모두 같을 때만 하나로 합친다 (329,363 → 324,763행). 이름+제조사만 같은 묶음 중 3,937개는 영양값이 달라 다른 제품으로 본다.
 
-## 코드 구조 (v1 완료: 적재·검색·상세·비교·추천·웹 화면. v2 완료: 인덱스·FULLTEXT·Redis 캐시. v3 회원 진행 중: 1단계 가입·로그인)
+## 코드 구조 (v1 완료: 적재·검색·상세·비교·추천·웹 화면. v2 완료: 인덱스·FULLTEXT·Redis 캐시. v3 회원 진행 중: 1단계 가입·로그인, 2단계 리프레시 토큰)
 | 경로 | 내용 |
 |---|---|
 | `app/db.py` | `.env`의 `DATABASE_URL`로 엔진 생성 |
 | `app/auth.py` | 회원 인증(v3): `hash_password`/`verify_password`(bcrypt, `BCRYPT_ROUNDS=12`), `create_access_token`/`read_access_token`(JWT HS256 15분, `.env`의 `JWT_SECRET`), 없는 이메일용 `DUMMY_HASH`(응답 시간으로 가입 여부 안 드러나게), 비밀번호 조합 규칙 `follows_password_rule`(2종류 이상 10자 / 3종류 이상 8자) |
+| `app/refresh.py` | 리프레시 토큰(v3 2단계): `issue`(무작위 토큰, sha256 해시만 저장, 14일, `family_id` 묶음), `rotate`(조건부 UPDATE로 `used_at` 표시 → 0행이면 재사용으로 보고 `revoke_user`), `logout`(그 묶음만 끊기) |
 | `app/cache.py` | Redis 캐시(v2): `get_or_set(key, 모델, compute)`로 결과 JSON 저장, TTL 1시간, `clear()`로 `nutri:*` 키 SCAN 삭제(적재 후 호출). `REDIS_URL`이 없거나 Redis가 꺼져 있으면 DB만 사용 |
-| `app/models.py` | `users` 테이블(v3, email unique·소문자, password_hash, alembic `0004`), `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). v2 인덱스 3개: (category, basis, sodium_mg / sugar_g / sat_fat_g), alembic `0002`. FULLTEXT ngram `ft_products_name`·`ft_products_maker`, alembic `0003` (불용어 끄고 만듦) |
-| `app/main.py` | FastAPI 앱. API: `GET /api/products` (검색), `GET /api/products/{식품코드}` (상세, 없으면 404), `.../alternatives` (추천), `GET /api/compare` (같은 종류 비교). 화면: `/` (검색), `/products/{식품코드}` (상세 + 추천 5개씩), `/compare`. `format_nutrient` 필터로 NULL은 "정보 없음". 결과는 `search_result`·`compare_result`·`alternatives_result`가 캐시를 거쳐 만듦(API·화면 공용). 회원 API(v3): `POST /api/auth/signup`(201, 중복 409), `POST /api/auth/login`(실패는 이유 상관없이 같은 401), `GET /api/me`(`current_user` 의존성, Bearer 토큰). 실행 `uvicorn app.main:app --reload` |
+| `app/models.py` | `users` 테이블(v3, email unique·소문자, password_hash, alembic `0004`), `refresh_tokens`(token_hash unique, family_id 인덱스, used_at·revoked_at, 회원 삭제 시 CASCADE, alembic `0005`), `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). v2 인덱스 3개: (category, basis, sodium_mg / sugar_g / sat_fat_g), alembic `0002`. FULLTEXT ngram `ft_products_name`·`ft_products_maker`, alembic `0003` (불용어 끄고 만듦) |
+| `app/main.py` | FastAPI 앱. API: `GET /api/products` (검색), `GET /api/products/{식품코드}` (상세, 없으면 404), `.../alternatives` (추천), `GET /api/compare` (같은 종류 비교). 화면: `/` (검색), `/products/{식품코드}` (상세 + 추천 5개씩), `/compare`. `format_nutrient` 필터로 NULL은 "정보 없음". 결과는 `search_result`·`compare_result`·`alternatives_result`가 캐시를 거쳐 만듦(API·화면 공용). 회원 API(v3): `POST /api/auth/signup`(201, 중복 409), `POST /api/auth/login`(실패는 이유 상관없이 같은 401, 액세스+리프레시 토큰), `POST /api/auth/refresh`(순환, 실패는 같은 401 "다시 로그인해 주세요."), `POST /api/auth/logout`(204), `GET /api/me`(`current_user` 의존성, Bearer 토큰). 실행 `uvicorn app.main:app --reload` |
 | `app/templates/` | Jinja2 템플릿. `base.html`(공통 스타일: `:root` 색 변수 + 다크 모드, 카드형, 기준 칸 강조 `.hl`, 정보 없음 `.na`. "출처: 공공데이터포털" 표시), `search`·`detail`·`compare`·`not_found`, 공통 조각 `_product_table`·`_pager`·`_size_picker` |
 | `.claude/launch.json` | 브라우저 미리보기용 서버 설정 (uvicorn 8000번) |
 | `app/recommend.py` | 대체 제품 추천: 같은 (대표식품명, 기준량)에서 나트륨 또는 당류가 기준 제품보다 낮은 제품, 낮은 순(당류로 찾을 때는 나트륨이 더 높은 것 제외). 기준 값이 NULL이면 빈 목록. API는 `GET /api/products/{식품코드}/alternatives?by=sodium|sugar&limit=10` |
 | `app/compare.py` | 같은 종류 비교: (대표식품명, 기준량) 묶음을 나트륨·당류·포화지방 낮은 순, NULL은 `IS NULL`로 맨 뒤 |
 | `app/search.py` | 검색: 제품 이름 또는 회사 이름(`target`) — `text_condition`: 2글자 이상 낱말이면 FULLTEXT `MATCH` + `LIKE`(결과는 LIKE와 같음), 한 글자·부호로 끊긴 검색어나 대표식품명이 있을 때는 `LIKE`만 + 대표식품명·기준량 필터 + 영양값 이하 조건(`max_kcal`·`max_sodium`·`max_sugar`·`max_sat_fat`, NULL은 제외) + 이름·식품코드순 + 쪽 나누기 |
-| `app/schemas.py` | 요청·응답 모양 (pydantic). 영양값은 float, 없으면 null. 회원: `SignupRequest`(이메일 형식·소문자, 비밀번호 조합 규칙 `auth.follows_password_rule`·72바이트 이하), `LoginRequest`, `UserItem`(해시 없음), `TokenResponse` |
+| `app/schemas.py` | 요청·응답 모양 (pydantic). 영양값은 float, 없으면 null. 회원: `SignupRequest`(이메일 형식·소문자, 비밀번호 조합 규칙 `auth.follows_password_rule`·72바이트 이하), `LoginRequest`, `UserItem`(해시 없음), `TokenResponse`(리프레시 토큰 포함), `RefreshRequest` |
 | `scripts/measure_search.py` | 검색·상세·비교·추천 응답 시간 측정 (README "성능 기록"). `python -m scripts.measure_search` (캐시 적중) / `--no-cache` (DB) |
 | `app/loader.py` | 적재: CSV → 보정 → 칼럼 정리 → 중복 합치기 → `ON DUPLICATE KEY UPDATE` → 캐시 비우기. `python -m app.loader` |
 | `alembic/` | 마이그레이션. `alembic.ini`는 **ASCII만** (Windows에서 cp949로 읽혀 한글이 있으면 깨짐) |
@@ -140,4 +141,5 @@
   - `corrections.csv`에서 수정값 칸을 비우면 NULL이 됨 (read_csv가 빈칸을 NaN으로 읽음)
   - 한식조선간장은 라벨 자체가 100g당 613mg으로 인쇄됨(천일염 20%면 약 7,800mg이어야 함). 해천은 찾은 라벨의 수입사가 달라 근거로 안 씀
 - [x] v3 1단계 회원가입·로그인 (2026-11-13): 이메일+비밀번호(가입 때 이것만, 생년월일 등은 나중에 개인정보 입력 때 — 사용자 결정), bcrypt 2^12, 비밀번호는 국내 기준 조합 규칙(영문 대·소문자·숫자·특수문자 중 2종류 이상 10자 / 3종류 이상 8자, 사용자 결정), JWT 15분, 실패는 같은 401 + 없는 이메일도 가짜 해시로 확인. 가입 384ms·로그인 330ms(대부분 bcrypt)·실패 347~369ms·`/api/me` 14.5ms. 테스트 106개 약 13초
+- [x] v3 2단계 리프레시 토큰 (2026-11-13): 무작위 토큰 + sha256 해시 저장, 14일(순환마다 새로), 순환·재사용 감지(그 회원 토큰 전부 끊기), 동시 요청은 조건부 UPDATE로 하나만, 로그아웃은 그 기기 묶음만. 순환 41.6ms·로그아웃 24.2ms·로그인 418ms. 테스트 116개 약 13초
 - [ ] TestClient가 `httpx` 대신 `httpx2`를 권장하는 경고가 뜸 → 바꿀지 결정 필요 (지금은 httpx 0.28.1, 동작에는 문제 없음)

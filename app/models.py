@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Index, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -57,4 +57,25 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True)
     # 비밀번호 원문은 저장하지 않고 bcrypt 해시만 저장한다 ($2b$12$... 60글자)
     password_hash: Mapped[str] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class RefreshToken(Base):
+    """리프레시 토큰 (v3 2단계). 액세스 토큰(15분)이 만료되면 이걸로 새로 받는다.
+
+    토큰 원문은 저장하지 않고 sha256 해시만 저장한다 (DB가 유출돼도 토큰으로 쓸 수 없게).
+    한 번 쓰면 used_at을 채우고 새 토큰을 준다(순환). 이미 쓴 토큰이 다시 오면 도난으로 보고 그 회원 토큰을 모두 끊는다.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 회원이 지워지면 그 회원의 토큰도 같이 지워진다
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)  # sha256 16진수 64글자
+    # 같은 로그인에서 순환으로 이어진 토큰 묶음. 로그아웃은 이 묶음(그 기기)만 끊는다
+    family_id: Mapped[str] = mapped_column(String(36), index=True)  # ix_refresh_tokens_family_id (alembic 0005)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)  # UTC
+    used_at: Mapped[datetime | None] = mapped_column(DateTime)  # 순환에 쓴 시각. 쓰기 전엔 NULL
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)  # 로그아웃·재사용 감지로 끊은 시각
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

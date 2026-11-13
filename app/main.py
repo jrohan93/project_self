@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
@@ -16,13 +16,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import auth, cache
+from app import auth, cache, refresh
 from app.compare import Basis, SortKey, compare_products
 from app.db import make_engine
 from app.models import Product, User
 from app.recommend import RECOMMEND_COLUMNS, RecommendKey, find_alternatives
-from app.schemas import (AlternativesResult, CompareResult, LoginRequest, ProductItem, SearchResult, SignupRequest,
-                         TokenResponse, UserItem)
+from app.schemas import (AlternativesResult, CompareResult, LoginRequest, ProductItem, RefreshRequest, SearchResult,
+                         SignupRequest, TokenResponse, UserItem)
 from app.search import SearchTarget, search_products
 
 app = FastAPI(title="가공식품 영양 비교 검색")
@@ -163,6 +163,17 @@ def compare(
 # 'Authorization: Bearer <토큰>' 머리말을 읽는다. auto_error=False: 없을 때 403 대신 아래에서 401을 준다
 bearer = HTTPBearer(auto_error=False)
 LOGIN_FAILED = "이메일 또는 비밀번호가 맞지 않아요."  # 어느 쪽이 틀렸는지 알려 주지 않는다
+LOGIN_AGAIN = "다시 로그인해 주세요."  # 리프레시 토큰이 없거나·끊겼거나·만료됐거나·재사용됨 (이유는 알려 주지 않는다)
+
+
+def token_response(session: Session, user_id: int, refresh_token: str | None = None) -> TokenResponse:
+    """액세스 토큰 + 리프레시 토큰 응답. 로그인이면 리프레시 토큰을 새 묶음으로 만들고, 순환이면 이미 만든 것을 넣는다."""
+    return TokenResponse(
+        access_token=auth.create_access_token(user_id),
+        expires_in=auth.ACCESS_TOKEN_MINUTES * 60,
+        refresh_token=refresh_token or refresh.issue(session, user_id),
+        refresh_expires_in=refresh.REFRESH_TOKEN_DAYS * 24 * 60 * 60,
+    )
 
 
 def current_user(
@@ -200,8 +211,25 @@ def login(body: LoginRequest, session: Session = Depends(get_session)) -> TokenR
     if user is None or not password_ok:
         raise HTTPException(status_code=401, detail=LOGIN_FAILED)
 
-    return TokenResponse(access_token=auth.create_access_token(user.id),
-                         expires_in=auth.ACCESS_TOKEN_MINUTES * 60)
+    return token_response(session, user.id)
+
+
+@app.post("/api/auth/refresh", response_model=TokenResponse)
+def refresh_tokens(body: RefreshRequest, session: Session = Depends(get_session)) -> TokenResponse:
+    """리프레시 토큰으로 새 액세스 토큰 + 새 리프레시 토큰을 받는다. 보낸 리프레시 토큰은 이제 못 쓴다."""
+    rotated = refresh.rotate(session, body.refresh_token)
+    if rotated is None:
+        raise HTTPException(status_code=401, detail=LOGIN_AGAIN)
+    user_id, new_refresh_token = rotated
+    return token_response(session, user_id, new_refresh_token)
+
+
+@app.post("/api/auth/logout", status_code=204)
+def logout(body: RefreshRequest, session: Session = Depends(get_session)) -> Response:
+    """이 기기의 로그인을 끊는다 (리프레시 토큰 묶음). 이미 받은 액세스 토큰은 15분 안에 만료된다.
+    모르는 토큰이어도 204: 로그아웃은 몇 번 해도 결과가 같다."""
+    refresh.logout(session, body.refresh_token)
+    return Response(status_code=204)
 
 
 @app.get("/api/me", response_model=UserItem)

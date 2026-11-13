@@ -91,4 +91,10 @@ class UserItem(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    expires_in: int  # 몇 초 뒤 만료되는지
+    expires_in: int  # 액세스 토큰이 몇 초 뒤 만료되는지
+    refresh_token: str  # 액세스 토큰이 만료되면 /api/auth/refresh로 보내 새로 받는다 (한 번 쓰면 바뀜)
+    refresh_expires_in: int  # 리프레시 토큰이 몇 초 뒤 만료되는지
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(max_length=100)
