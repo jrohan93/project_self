@@ -1,4 +1,4 @@
-# 개발용 MySQL. 실행: docker compose up -d
+# 개발용 MySQL·Redis. 실행: docker compose up -d
 # 비밀번호 등은 같은 폴더의 .env에서 읽는다 (.env.example 참고)
 services:
   mysql:
@@ -20,6 +20,17 @@ services:
       - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 10
+
+  # v2 캐시: 검색·비교·추천 결과를 잠깐 저장해 같은 요청은 DB를 다시 읽지 않는다
+  redis:
+    image: redis:8.0
+    container_name: nutrition-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 10
 

@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import cache
 from app.compare import Basis, SortKey, compare_products
 from app.db import make_engine
 from app.models import Product
@@ -50,6 +51,48 @@ def get_session() -> Iterator[Session]:
         yield session
 
 
+# ---------------- 결과 만들기 (Redis 캐시) ----------------
+# API와 화면이 같이 쓴다. 같은 조건이면 캐시(app/cache.py)에서 꺼내고, 없으면 DB에서 읽어 저장한다.
+
+def search_result(session: Session, q: str, category: str | None, page: int, size: int,
+                  target: str = "name", basis: str | None = None,
+                  max_values: dict[str, float] | None = None) -> SearchResult:
+    max_values = max_values or {}
+    key = cache.make_key("search", q=q, category=category, page=page, size=size,
+                         target=target, basis=basis, **max_values)
+
+    def compute() -> SearchResult:
+        total, products = search_products(session, q, category, page, size, target, basis, max_values)
+        return SearchResult(total=total, page=page, size=size,
+                            items=[ProductItem.model_validate(p) for p in products])
+
+    return cache.get_or_set(key, SearchResult, compute)
+
+
+def compare_result(session: Session, category: str, basis: str, sort: str, page: int, size: int) -> CompareResult:
+    key = cache.make_key("compare", category=category, basis=basis, sort=sort, page=page, size=size)
+
+    def compute() -> CompareResult:
+        total, products = compare_products(session, category, basis, sort, page, size)
+        return CompareResult(category=category, basis=basis, sort=sort, total=total, page=page, size=size,
+                             items=[ProductItem.model_validate(p) for p in products])
+
+    return cache.get_or_set(key, CompareResult, compute)
+
+
+def alternatives_result(session: Session, product: Product, by: str, limit: int) -> AlternativesResult:
+    key = cache.make_key("alternatives", food_code=product.food_code, by=by, limit=limit)
+
+    def compute() -> AlternativesResult:
+        total, alternatives = find_alternatives(session, product, by, limit)
+        return AlternativesResult(product=ProductItem.model_validate(product), by=by, total=total,
+                                  items=[ProductItem.model_validate(p) for p in alternatives])
+
+    return cache.get_or_set(key, AlternativesResult, compute)
+
+
+# ---------------- JSON API ----------------
+
 @app.get("/api/products", response_model=SearchResult)
 def list_products(
     q: str = Query("", max_length=100, description="검색어"),
@@ -73,13 +116,7 @@ def list_products(
     limits = {"max_kcal": max_kcal, "max_sodium": max_sodium, "max_sugar": max_sugar, "max_sat_fat": max_sat_fat}
     max_values = {key: value for key, value in limits.items() if value is not None}
 
-    total, products = search_products(session, q, category, page, size, target, basis, max_values)
-    return SearchResult(
-        total=total,
-        page=page,
-        size=size,
-        items=[ProductItem.model_validate(p) for p in products],
-    )
+    return search_result(session, q, category, page, size, target, basis, max_values)
 
 
 @app.get("/api/products/{food_code}", response_model=ProductItem)
@@ -102,13 +139,7 @@ def get_alternatives(
     if product is None:
         raise HTTPException(status_code=404, detail="해당 제품이 없어요.")
 
-    total, alternatives = find_alternatives(session, product, by, limit)
-    return AlternativesResult(
-        product=ProductItem.model_validate(product),
-        by=by,
-        total=total,
-        items=[ProductItem.model_validate(p) for p in alternatives],
-    )
+    return alternatives_result(session, product, by, limit)
 
 
 @app.get("/api/compare", response_model=CompareResult)
@@ -120,20 +151,11 @@ def compare(
     size: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_session),
 ) -> CompareResult:
-    total, products = compare_products(session, category, basis, sort, page, size)
-    return CompareResult(
-        category=category,
-        basis=basis,
-        sort=sort,
-        total=total,
-        page=page,
-        size=size,
-        items=[ProductItem.model_validate(p) for p in products],
-    )
+    return compare_result(session, category, basis, sort, page, size)
 
 
 # ---------------- 화면 (HTML) ----------------
-# API와 같은 함수(search_products, compare_products, find_alternatives)를 쓰고, 결과를 템플릿에 넘긴다.
+# API와 같은 함수(search_result, compare_result, alternatives_result)를 쓰고, 결과를 템플릿에 넘긴다.
 
 SORT_LABELS = {"sodium": "나트륨", "sugar": "당류", "sat_fat": "포화지방"}
 
@@ -189,13 +211,9 @@ def search_page(
     if q:
         if target == "category":
             # 대표식품명은 정확히 같은 것만 (참치 → 참치김밥이 섞이지 않게)
-            total, products = search_products(session, "", q, page, size, "name", basis or None, max_values)
+            result = search_result(session, "", q, page, size, "name", basis or None, max_values)
         else:
-            total, products = search_products(session, q, None, page, size, target, basis or None, max_values)
-        result = SearchResult(
-            total=total, page=page, size=size,
-            items=[ProductItem.model_validate(p) for p in products],
-        )
+            result = search_result(session, q, None, page, size, target, basis or None, max_values)
 
     # 지금 조건 그대로 쪽(과 쪽 크기)만 바꾼 주소 (비어 있는 조건은 주소에서 뺀다)
     params = {"q": q, "target": target, "basis": basis,
@@ -224,16 +242,16 @@ def detail_page(request: Request, food_code: str, session: Session = Depends(get
         ("sodium", "나트륨", "나트륨이", ""),
         ("sugar", "당류", "당류가", " (나트륨이 이 제품보다 높은 제품은 뺐어요)"),
     ]:
-        total, items = find_alternatives(session, product, by, ALTERNATIVES_ON_DETAIL)
+        found = alternatives_result(session, product, by, ALTERNATIVES_ON_DETAIL)
         alternatives.append({
             "key": by,  # 표에서 강조할 칸
             "label": label,
             "subject": subject,  # 제목용 (조사가 달라서 따로 둔다)
             "note": note,
             "base_value": getattr(product, RECOMMEND_COLUMNS[by].key),  # None이면 '찾을 수 없음' 안내
-            "total": total,
+            "total": found.total,
             # 'items'라고 하면 템플릿에서 딕셔너리의 .items() 메서드와 헷갈리므로 products로 둔다
-            "products": [ProductItem.model_validate(p) for p in items],
+            "products": found.items,
         })
 
     return templates.TemplateResponse(
@@ -253,11 +271,7 @@ def compare_page(
     session: Session = Depends(get_session),
 ):
     size = size if size in PAGE_SIZES else DEFAULT_PAGE_SIZE
-    total, products = compare_products(session, category, basis, sort, page, size)
-    result = CompareResult(
-        category=category, basis=basis, sort=sort, total=total, page=page, size=size,
-        items=[ProductItem.model_validate(p) for p in products],
-    )
+    result = compare_result(session, category, basis, sort, page, size)
 
     def page_url(n: int, page_size: int = size) -> str:
         return "/compare?" + urlencode(

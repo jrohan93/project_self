@@ -14,6 +14,7 @@ import pandas as pd
 from sqlalchemy import Engine
 from sqlalchemy.dialects.mysql import insert
 
+from app import cache
 from app.db import make_engine
 from app.models import Product
 
@@ -110,7 +111,9 @@ def main() -> None:
     print(f"원본 {len(raw)}건, 보정 {len(corrections)}개 값, 중복 합친 뒤 {len(products)}건")
 
     save(make_engine(), to_records(products))
-    print(f"적재 완료: {len(products)}건, {time.perf_counter() - started:.1f}초")
+    # 데이터가 바뀌었으니 옛날 검색·비교·추천 결과가 보이지 않게 캐시를 비운다
+    cleared = cache.clear()
+    print(f"적재 완료: {len(products)}건, {time.perf_counter() - started:.1f}초, 캐시 {cleared}개 비움")
 
 
 if __name__ == "__main__":

@@ -2,8 +2,9 @@
 
 engine: 테스트 전용 DB(TEST_DATABASE_URL)에 빈 products 테이블을 만들어 준다.
         마이그레이션은 테스트 실행마다 한 번만 처음부터 다시 적용하고(FULLTEXT 인덱스 만들기가 느려서),
-        테스트마다 TRUNCATE로 테이블만 비운다.
+        테스트마다 DELETE로 테이블만 비운다.
 api: 그 테스트 DB를 쓰는 FastAPI TestClient.
+redis_cache: 테스트 전용 Redis(TEST_REDIS_URL)를 비워서 캐시로 끼운다. 이게 없는 테스트는 캐시를 끈 채로 돈다.
 MySQL이 떠 있지 않으면 그 테스트는 건너뛴다 (docker compose up -d 후 실행).
 """
 
@@ -18,10 +19,19 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
+from app import cache
 from app.main import app, get_session
 
 load_dotenv()
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+TEST_REDIS_URL = os.getenv("TEST_REDIS_URL")
+
+
+@pytest.fixture(autouse=True)
+def no_cache(monkeypatch):
+    """모든 테스트에서 기본은 캐시 끔: 실제 캐시(REDIS_URL)에 테스트 데이터가 섞이지 않게,
+    그리고 테스트마다 테이블을 비우는데 앞 테스트의 캐시 결과가 나오지 않게."""
+    monkeypatch.setattr(cache, "client", None)
 
 
 @pytest.fixture(scope="session")
@@ -46,9 +56,13 @@ def migrated_engine():
 
 @pytest.fixture
 def engine(migrated_engine):
-    """테스트마다: 테이블을 비워서 빈 테이블로 시작한다 (인덱스는 그대로)."""
+    """테스트마다: 테이블을 비워서 빈 테이블로 시작한다 (인덱스는 그대로).
+
+    TRUNCATE가 아니라 DELETE: TRUNCATE는 테이블을 새로 만들면서 FULLTEXT 보조 테이블까지
+    다시 만들어 한 번에 1~2초 걸린다. 테스트 테이블은 몇 행뿐이라 DELETE는 거의 0초.
+    """
     with migrated_engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE products"))
+        conn.execute(text("DELETE FROM products"))
     return migrated_engine
 
 
@@ -64,3 +78,17 @@ def api(engine):
     app.dependency_overrides[get_session] = test_session
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def redis_cache(monkeypatch):
+    """테스트 전용 Redis DB를 비우고 캐시로 끼운다. Redis가 꺼져 있으면 건너뛴다."""
+    if not TEST_REDIS_URL:
+        pytest.skip(".env에 TEST_REDIS_URL이 없음")
+    client = cache.connect(TEST_REDIS_URL)
+    try:
+        client.flushdb()  # 테스트 전용 DB 번호(1)만 비운다
+    except cache.redis.RedisError:
+        pytest.skip("테스트 Redis에 연결할 수 없음 (docker compose up -d 했는지 확인)")
+    monkeypatch.setattr(cache, "client", client)
+    return client
