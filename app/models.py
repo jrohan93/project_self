@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -79,3 +79,21 @@ class RefreshToken(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime)  # 순환에 쓴 시각. 쓰기 전엔 NULL
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime)  # 로그아웃·재사용 감지로 끊은 시각
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Favorite(Base):
+    """관심 제품 (v3 4단계). 회원이 저장한 제품 한 개가 한 행.
+
+    한 회원이 같은 제품을 두 번 저장할 수 없다 (user_id, food_code unique).
+    회원이나 제품이 지워지면 같이 지워진다.
+    """
+
+    __tablename__ = "favorites"
+    __table_args__ = (UniqueConstraint("user_id", "food_code", name="uq_favorites_user_product"),)
+
+    # 자동 증가 id: 저장한 순서(최근 것 먼저)로 보여줄 때 쓴다 (created_at은 초 단위라 같은 초에 저장하면 순서를 모름)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    food_code: Mapped[str] = mapped_column(String(30), ForeignKey("products.food_code", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+

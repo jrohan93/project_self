@@ -4,7 +4,21 @@
 
 {% block content %}
 <section class="card">
-  <h2>{{ product.name }}</h2>
+  <div class="card-head">
+    <h2>{{ product.name }}</h2>
+    {% if user and saved %}
+      <form method="post" action="/favorites/{{ product.food_code }}/delete">
+        <input type="hidden" name="next" value="/products/{{ product.food_code }}">
+        <button class="secondary" type="submit">★ 관심 제품에서 빼기</button>
+      </form>
+    {% elif user %}
+      <form method="post" action="/favorites/{{ product.food_code }}">
+        <button type="submit">☆ 관심 제품에 저장</button>
+      </form>
+    {% else %}
+      <a class="small" href="/login?next=/products/{{ product.food_code }}">로그인하면 관심 제품에 저장할 수 있어요</a>
+    {% endif %}
+  </div>
   <div class="pills">
     <span class="muted">{{ product.maker or "회사 정보 없음" }}</span>
     <a class="pill" href="/?target=category&q={{ product.category | urlencode }}">{{ product.category }}</a>

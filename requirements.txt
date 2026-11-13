@@ -14,6 +14,7 @@ alembic==1.20.1
 fastapi==0.162.5
 uvicorn==0.54.0      # FastAPI 앱을 실행하는 서버
 jinja2==3.1.6        # 화면(HTML 템플릿)
+python-multipart==0.0.33  # 화면 폼(로그인·가입) 받기 (v3 4단계)
 
 # 캐시 (v2)
 redis==8.1.0

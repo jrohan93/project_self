@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}로그인 - 가공식품 영양 비교{% endblock %}
+
+{% block content %}
+<section class="card form-card">
+  <h2>로그인</h2>
+  <p class="muted small">검색은 로그인 없이 쓸 수 있어요. 로그인하면 관심 제품을 저장할 수 있어요.</p>
+  <form method="post" action="/login">
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>이메일 <input type="email" name="email" value="{{ email }}" maxlength="255" required autocomplete="username"></label>
+    <label>비밀번호 <input type="password" name="password" maxlength="200" required autocomplete="current-password"></label>
+    <button type="submit">로그인</button>
+  </form>
+  <p class="small">처음이신가요? <a href="/signup?next={{ next | urlencode }}">회원가입</a></p>
+</section>
+{% endblock %}

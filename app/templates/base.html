@@ -109,6 +109,21 @@
     .pager { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 14px; }
     .pager a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 8px; }
 
+    /* 머리 오른쪽: 로그인 상태 */
+    .nav { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 14px; }
+    .nav form { margin: 0; }
+    .linklike { background: none; border: none; padding: 0; color: var(--accent); font-weight: 400; font-size: 14px; }
+    .linklike:hover { text-decoration: underline; }
+
+    /* 로그인·가입 폼 */
+    .form-card { max-width: 420px; margin: 0 auto; }
+    .form-card form { display: flex; flex-direction: column; gap: 12px; }
+    .form-card label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+    .error { color: #c0392b; background: rgba(192, 57, 43, .08); border-radius: 8px; padding: 8px 12px; margin: 0; }
+    /* 테두리만 있는 버튼 (관심 제품 빼기 등) */
+    button.secondary { background: var(--card); color: var(--accent); border-color: var(--line); }
+    button.small { padding: 4px 10px; font-size: 13px; }
+
     footer { border-top: 1px solid var(--line); padding: 16px 0 28px; font-size: 13px; color: var(--muted); }
   </style>
 </head>
@@ -117,6 +132,17 @@
     <div class="wrap">
       <a class="brand" href="/">가공식품 <span>영양 비교</span></a>
       <span class="tagline">같은 종류끼리, 같은 기준량으로 비교해요</span>
+      <nav class="nav">
+        {% if user %}
+          <span class="muted">{{ user.email }}</span>
+          <a href="/favorites">관심 제품</a>
+          {# 로그아웃은 상태를 바꾸므로 링크(GET)가 아니라 POST 폼 #}
+          <form method="post" action="/logout"><button class="linklike" type="submit">로그아웃</button></form>
+        {% else %}
+          <a href="/login?next={{ request.url.path | urlencode }}">로그인</a>
+          <a href="/signup">회원가입</a>
+        {% endif %}
+      </nav>
     </div>
   </header>
   <main class="wrap">

@@ -1,23 +1,27 @@
 """FastAPI 앱. 실행: uvicorn app.main:app --reload
 
-/api/... 는 JSON API, 나머지(/, /products/..., /compare)는 Jinja2로 만든 HTML 화면.
+/api/... 는 JSON API, 나머지(/, /products/..., /compare, /login, /favorites ...)는 Jinja2로 만든 HTML 화면.
+API는 'Authorization: Bearer 토큰'으로, 화면은 HttpOnly 쿠키로 로그인을 확인한다.
 """
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlencode
 
 import redis
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import auth, cache, login_limit, refresh
+from app import auth, cache, favorites, login_limit, refresh
 from app.compare import Basis, SortKey, compare_products
 from app.db import make_engine
 from app.models import Product, User
@@ -191,8 +195,8 @@ def current_user(
     return user
 
 
-@app.post("/api/auth/signup", response_model=UserItem, status_code=201)
-def signup(body: SignupRequest, session: Session = Depends(get_session)) -> UserItem:
+def create_user(session: Session, body: SignupRequest) -> User:
+    """회원가입 (API·화면 공용). 이미 가입된 이메일이면 409."""
     user = User(email=body.email, password_hash=auth.hash_password(body.password))
     session.add(user)
     try:
@@ -201,12 +205,17 @@ def signup(body: SignupRequest, session: Session = Depends(get_session)) -> User
         session.rollback()
         raise HTTPException(status_code=409, detail="이미 가입된 이메일이에요.")
     session.refresh(user)  # DB가 정한 id·created_at을 읽어 온다
-    return UserItem.model_validate(user)
+    return user
 
 
-@app.post("/api/auth/login", response_model=TokenResponse)
-def login(body: LoginRequest, session: Session = Depends(get_session)) -> TokenResponse:
-    email = auth.normalize_email(body.email)
+@app.post("/api/auth/signup", response_model=UserItem, status_code=201)
+def signup(body: SignupRequest, session: Session = Depends(get_session)) -> UserItem:
+    return UserItem.model_validate(create_user(session, body))
+
+
+def authenticate(session: Session, email: str, password: str) -> User:
+    """이메일·비밀번호 확인 (API·화면 공용). 실패하면 401, 5번 실패로 막혀 있으면 429, Redis가 꺼져 있으면 503."""
+    email = auth.normalize_email(email)
 
     try:
         # 5번 틀려서 막혀 있으면 비밀번호를 확인하지도 않는다 (맞는 비밀번호여도 막는다: 아니면 계속 넣어 볼 수 있음)
@@ -217,7 +226,7 @@ def login(body: LoginRequest, session: Session = Depends(get_session)) -> TokenR
         user = session.scalars(select(User).where(User.email == email)).one_or_none()
 
         # 가입하지 않은 이메일도 가짜 해시로 한 번 확인한다: 응답 시간이 같아서 가입 여부를 알 수 없게
-        password_ok = auth.verify_password(body.password, user.password_hash if user else auth.DUMMY_HASH)
+        password_ok = auth.verify_password(password, user.password_hash if user else auth.DUMMY_HASH)
         if user is None or not password_ok:
             login_limit.record_failure(email)  # 가입하지 않은 이메일도 똑같이 센다
             raise HTTPException(status_code=401, detail=LOGIN_FAILED)
@@ -226,6 +235,12 @@ def login(body: LoginRequest, session: Session = Depends(get_session)) -> TokenR
         raise HTTPException(status_code=503, detail=LOGIN_UNAVAILABLE) from None
 
     login_limit.reset(email)  # 지우지 못해도 로그인은 그대로 (login_limit.reset 참고)
+    return user
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(body: LoginRequest, session: Session = Depends(get_session)) -> TokenResponse:
+    user = authenticate(session, body.email, body.password)
     return token_response(session, user.id)
 
 
@@ -252,8 +267,110 @@ def me(user: User = Depends(current_user)) -> UserItem:
     return UserItem.model_validate(user)
 
 
+# ---------------- 관심 제품 API (v3 4단계) ----------------
+# 주소에 회원 id를 넣지 않는다(/api/me/...): 누구의 목록인지는 토큰으로만 정해져서 남의 목록을 고를 방법이 없다
+
+@app.get("/api/me/favorites", response_model=list[ProductItem])
+def list_favorites(user: User = Depends(current_user), session: Session = Depends(get_session)) -> list[ProductItem]:
+    """내 관심 제품, 최근에 저장한 것 먼저."""
+    return [ProductItem.model_validate(p) for p in favorites.list_products(session, user.id)]
+
+
+@app.put("/api/me/favorites/{food_code}", status_code=204)
+def add_favorite(food_code: str, user: User = Depends(current_user),
+                 session: Session = Depends(get_session)) -> Response:
+    """저장. PUT: 몇 번 해도 결과가 같다 (이미 저장했어도 204). 없는 제품이면 404."""
+    if not favorites.add(session, user.id, food_code):
+        raise HTTPException(status_code=404, detail="해당 제품이 없어요.")
+    return Response(status_code=204)
+
+
+@app.delete("/api/me/favorites/{food_code}", status_code=204)
+def remove_favorite(food_code: str, user: User = Depends(current_user),
+                    session: Session = Depends(get_session)) -> Response:
+    """내 목록에서 지운다. 내 목록에 없으면 404 (다른 회원이 저장한 제품이어도 똑같이 404)."""
+    if not favorites.remove(session, user.id, food_code):
+        raise HTTPException(status_code=404, detail="관심 제품에 없는 제품이에요.")
+    return Response(status_code=204)
+
+
 # ---------------- 화면 (HTML) ----------------
 # API와 같은 함수(search_result, compare_result, alternatives_result)를 쓰고, 결과를 템플릿에 넘긴다.
+
+# ----- 화면 로그인 (v3 4단계): 토큰을 HttpOnly 쿠키에 둔다 -----
+# - HttpOnly: 자바스크립트가 쿠키를 읽을 수 없다 → 화면에 XSS가 생겨도 토큰을 훔쳐 가지 못한다
+# - SameSite=Lax: 다른 사이트에서 보낸 POST에는 쿠키가 붙지 않는다 → 남의 사이트가 몰래 관심 제품을 바꾸지 못한다(CSRF).
+#   그래서 상태를 바꾸는 화면 요청(로그인·로그아웃·관심 제품 추가·빼기)은 모두 POST 폼으로만 받는다
+# - API(/api/...)는 쿠키를 보지 않고 Bearer 토큰만 본다: API는 CSRF 걱정이 없다
+ACCESS_COOKIE = "access_token"
+REFRESH_COOKIE = "refresh_token"
+COOKIE_SECURE = os.getenv("COOKIE_SECURE") == "1"  # 운영(HTTPS)에서는 1: HTTPS로만 쿠키를 보낸다
+
+
+class ScreenLogin(NamedTuple):
+    user: User | None  # 로그인한 회원 (안 했으면 None)
+    new_tokens: TokenResponse | None  # 액세스 토큰이 만료돼 리프레시 토큰으로 새로 받았으면 그 토큰 (쿠키를 바꿔야 함)
+    expired: bool  # 리프레시 토큰도 못 쓰게 됐으면 True (쿠키를 지워야 함)
+
+
+def screen_login(request: Request, session: Session = Depends(get_session)) -> ScreenLogin:
+    """화면 요청에서 로그인한 회원을 찾는다. 로그인하지 않아도 화면은 볼 수 있으니 오류를 내지 않는다.
+
+    1. 액세스 토큰 쿠키가 맞으면 그 회원
+    2. 없거나 만료됐으면 리프레시 토큰 쿠키로 순환해서 새 토큰을 받는다 (API의 /api/auth/refresh와 같은 일)
+    """
+    user_id = auth.read_access_token(request.cookies.get(ACCESS_COOKIE, ""))
+    if user_id is not None:
+        return ScreenLogin(session.get(User, user_id), None, False)
+
+    raw_refresh = request.cookies.get(REFRESH_COOKIE)
+    if not raw_refresh:
+        return ScreenLogin(None, None, False)
+    rotated = refresh.rotate(session, raw_refresh)
+    if rotated is None:  # 만료·로그아웃·재사용: 다시 로그인해야 한다
+        return ScreenLogin(None, None, True)
+    user_id, new_refresh_token = rotated
+    return ScreenLogin(session.get(User, user_id), token_response(session, user_id, new_refresh_token), False)
+
+
+def set_login_cookies(response: Response, tokens: TokenResponse) -> None:
+    for name, value, seconds in [(ACCESS_COOKIE, tokens.access_token, tokens.expires_in),
+                                 (REFRESH_COOKIE, tokens.refresh_token, tokens.refresh_expires_in)]:
+        response.set_cookie(name, value, max_age=seconds, httponly=True, samesite="lax", secure=COOKIE_SECURE)
+
+
+def clear_login_cookies(response: Response) -> None:
+    response.delete_cookie(ACCESS_COOKIE, httponly=True, samesite="lax", secure=COOKIE_SECURE)
+    response.delete_cookie(REFRESH_COOKIE, httponly=True, samesite="lax", secure=COOKIE_SECURE)
+
+
+def apply_login_cookies(response: Response, login: ScreenLogin) -> Response:
+    """screen_login에서 토큰이 바뀌었거나 끊겼으면 응답 쿠키에 반영한다."""
+    if login.new_tokens:
+        set_login_cookies(response, login.new_tokens)
+    elif login.expired:
+        clear_login_cookies(response)
+    return response
+
+
+def render(request: Request, login: ScreenLogin, name: str, context: dict, status_code: int = 200) -> Response:
+    """화면을 그린다. 모든 화면 머리에 로그인 상태가 보이도록 user를 같이 넘긴다."""
+    response = templates.TemplateResponse(request, name, {**context, "user": login.user}, status_code=status_code)
+    return apply_login_cookies(response, login)
+
+
+def safe_next(next_url: str) -> str:
+    """로그인 뒤 돌아갈 주소. 우리 사이트 안의 주소(/로 시작)만 받는다.
+    //evil.com 이나 /\\evil.com 같은 주소는 브라우저가 다른 사이트로 보내므로 막는다 (열린 리다이렉트 방지)."""
+    if next_url.startswith("/") and not next_url.startswith("//") and "\\" not in next_url:
+        return next_url
+    return "/"
+
+
+def go(url: str) -> RedirectResponse:
+    # 303: POST 폼을 처리한 뒤 GET으로 다른 화면을 보여준다 (새로 고침해도 폼이 다시 전송되지 않게)
+    return RedirectResponse(url, status_code=303)
+
 
 SORT_LABELS = {"sodium": "나트륨", "sugar": "당류", "sat_fat": "포화지방"}
 
@@ -296,6 +413,7 @@ def search_page(
     page: int = Query(1, ge=1),
     size: int = Query(DEFAULT_PAGE_SIZE),
     session: Session = Depends(get_session),
+    login: ScreenLogin = Depends(screen_login),
 ):
     q = q.strip()
     size = size if size in PAGE_SIZES else DEFAULT_PAGE_SIZE
@@ -321,8 +439,8 @@ def search_page(
     def page_url(n: int, page_size: int = size) -> str:
         return "/?" + urlencode({**params, "page": n, "size": page_size})
 
-    return templates.TemplateResponse(
-        request, "search.html",
+    return render(
+        request, login, "search.html",
         {"q": q, "target": target, "screen_targets": SCREEN_TARGETS, "basis": basis,
          "max_values": max_values, "max_fields": MAX_FIELDS,
          "result": result, "page_url": page_url, "page_sizes": PAGE_SIZES},
@@ -330,10 +448,11 @@ def search_page(
 
 
 @app.get("/products/{food_code}", response_class=HTMLResponse)
-def detail_page(request: Request, food_code: str, session: Session = Depends(get_session)):
+def detail_page(request: Request, food_code: str, session: Session = Depends(get_session),
+                login: ScreenLogin = Depends(screen_login)):
     product = session.get(Product, food_code)
     if product is None:
-        return templates.TemplateResponse(request, "not_found.html", {}, status_code=404)
+        return render(request, login, "not_found.html", {}, status_code=404)
 
     alternatives = []
     for by, label, subject, note in [
@@ -352,9 +471,10 @@ def detail_page(request: Request, food_code: str, session: Session = Depends(get
             "products": found.items,
         })
 
-    return templates.TemplateResponse(
-        request, "detail.html",
-        {"product": ProductItem.model_validate(product), "alternatives": alternatives},
+    saved = login.user is not None and favorites.is_saved(session, login.user.id, food_code)
+    return render(
+        request, login, "detail.html",
+        {"product": ProductItem.model_validate(product), "alternatives": alternatives, "saved": saved},
     )
 
 
@@ -367,6 +487,7 @@ def compare_page(
     page: int = Query(1, ge=1),
     size: int = Query(DEFAULT_PAGE_SIZE),
     session: Session = Depends(get_session),
+    login: ScreenLogin = Depends(screen_login),
 ):
     size = size if size in PAGE_SIZES else DEFAULT_PAGE_SIZE
     result = compare_result(session, category, basis, sort, page, size)
@@ -376,7 +497,106 @@ def compare_page(
             {"category": category, "basis": basis, "sort": sort, "page": n, "size": page_size}
         )
 
-    return templates.TemplateResponse(
-        request, "compare.html",
+    return render(
+        request, login, "compare.html",
         {"result": result, "sort_labels": SORT_LABELS, "page_url": page_url, "page_sizes": PAGE_SIZES},
     )
+
+
+# ----- 회원 화면 (v3 4단계) -----
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = Query("/", max_length=500),
+               login: ScreenLogin = Depends(screen_login)):
+    if login.user:  # 이미 로그인했으면 폼을 보여줄 필요가 없다
+        return apply_login_cookies(go(safe_next(next)), login)
+    return render(request, login, "login.html", {"next": safe_next(next), "email": "", "error": None})
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_submit(request: Request, email: str = Form("", max_length=255), password: str = Form("", max_length=200),
+                 next: str = Form("/", max_length=500), session: Session = Depends(get_session)):
+    """API 로그인과 같은 authenticate를 쓴다: 실패 제한·같은 실패 문구·Redis 고장 시 거절이 그대로 적용된다."""
+    try:
+        user = authenticate(session, email, password)
+    except HTTPException as error:
+        context = {"next": safe_next(next), "email": email, "error": error.detail, "user": None}
+        return templates.TemplateResponse(request, "login.html", context,
+                                          status_code=error.status_code, headers=error.headers)
+    response = go(safe_next(next))
+    set_login_cookies(response, token_response(session, user.id))
+    return response
+
+
+@app.get("/signup", response_class=HTMLResponse)
+def signup_page(request: Request, next: str = Query("/", max_length=500),
+                login: ScreenLogin = Depends(screen_login)):
+    if login.user:
+        return apply_login_cookies(go(safe_next(next)), login)
+    return render(request, login, "signup.html",
+                  {"next": safe_next(next), "email": "", "error": None, "rule": auth.PASSWORD_RULE})
+
+
+@app.post("/signup", response_class=HTMLResponse)
+def signup_submit(request: Request, email: str = Form("", max_length=255), password: str = Form("", max_length=200),
+                  next: str = Form("/", max_length=500), session: Session = Depends(get_session)):
+    """API 가입과 같은 검사(SignupRequest)와 같은 create_user를 쓴다. 가입하면 바로 로그인된다."""
+    try:
+        user = create_user(session, SignupRequest(email=email, password=password))
+    except ValidationError as error:
+        first = error.errors()[0]
+        # 우리가 만든 검사(이메일 형식·비밀번호 규칙)는 그 문구를, 나머지(너무 김 등)는 짧은 안내를 보여준다
+        message = str(first["ctx"]["error"]) if "error" in first.get("ctx", {}) else "입력한 값을 확인해 주세요."
+        return signup_error(request, next, email, message, 422)
+    except HTTPException as error:  # 이미 가입된 이메일
+        return signup_error(request, next, email, error.detail, error.status_code)
+    response = go(safe_next(next))
+    set_login_cookies(response, token_response(session, user.id))
+    return response
+
+
+def signup_error(request: Request, next: str, email: str, message: str, status_code: int) -> Response:
+    context = {"next": safe_next(next), "email": email, "error": message, "rule": auth.PASSWORD_RULE, "user": None}
+    return templates.TemplateResponse(request, "signup.html", context, status_code=status_code)
+
+
+@app.post("/logout")
+def logout_submit(request: Request, session: Session = Depends(get_session)):
+    """이 브라우저의 로그인만 끊는다 (API 로그아웃과 같은 refresh.logout)."""
+    raw_refresh = request.cookies.get(REFRESH_COOKIE)
+    if raw_refresh:
+        refresh.logout(session, raw_refresh)
+    response = go("/")
+    clear_login_cookies(response)
+    return response
+
+
+@app.get("/favorites", response_class=HTMLResponse)
+def favorites_page(request: Request, session: Session = Depends(get_session),
+                   login: ScreenLogin = Depends(screen_login)):
+    if login.user is None:
+        return apply_login_cookies(go("/login?next=/favorites"), login)
+    products = [ProductItem.model_validate(p) for p in favorites.list_products(session, login.user.id)]
+    return render(request, login, "favorites.html", {"products": products})
+
+
+@app.post("/favorites/{food_code}")
+def favorite_add_submit(food_code: str, request: Request, session: Session = Depends(get_session),
+                        login: ScreenLogin = Depends(screen_login)):
+    if login.user is None:
+        return apply_login_cookies(go(f"/login?next=/products/{food_code}"), login)
+    if not favorites.add(session, login.user.id, food_code):
+        return render(request, login, "not_found.html", {}, status_code=404)
+    return apply_login_cookies(go(f"/products/{food_code}"), login)
+
+
+@app.post("/favorites/{food_code}/delete")
+def favorite_remove_submit(food_code: str, request: Request, next: str = Form("/favorites", max_length=500),
+                           session: Session = Depends(get_session), login: ScreenLogin = Depends(screen_login)):
+    if login.user is None:
+        return apply_login_cookies(go("/login?next=/favorites"), login)
+    if not favorites.remove(session, login.user.id, food_code):  # 내 목록에 없음 (남의 것이어도 같음)
+        return render(request, login, "not_found.html",
+                      {"message": "관심 제품에 없는 제품이에요."}, status_code=404)
+    return apply_login_cookies(go(safe_next(next)), login)
+

@@ -2,6 +2,6 @@
 
 {% block content %}
 <section class="card">
-  <p>해당 제품이 없어요. <a href="/">검색으로 돌아가기</a></p>
+  <p>{{ message or "해당 제품이 없어요." }} <a href="/">검색으로 돌아가기</a></p>
 </section>
 {% endblock %}

@@ -1,5 +1,6 @@
 {# 제품 목록 표. 검색·비교·추천 화면에서 같이 쓴다.
-   products: ProductItem 목록, highlight: 강조할 영양값 칸 ("sodium" / "sugar" / "sat_fat", 없으면 강조 안 함) #}
+   products: ProductItem 목록, highlight: 강조할 영양값 칸 ("sodium" / "sugar" / "sat_fat", 없으면 강조 안 함)
+   removable: 참이면 줄마다 '빼기' 버튼 (관심 제품 화면) #}
 <div class="table-wrap">
 <table>
   <thead>
@@ -9,6 +10,7 @@
       <th class="num {{ 'hl' if highlight == 'sodium' }}">나트륨</th>
       <th class="num {{ 'hl' if highlight == 'sugar' }}">당류</th>
       <th class="num {{ 'hl' if highlight == 'sat_fat' }}">포화지방</th>
+      {% if removable %}<th></th>{% endif %}
     </tr>
   </thead>
   <tbody>
@@ -22,6 +24,14 @@
       <td class="num {{ 'hl' if highlight == 'sodium' }}">{{ p.sodium_mg | nutrient("mg") }}</td>
       <td class="num {{ 'hl' if highlight == 'sugar' }}">{{ p.sugar_g | nutrient("g") }}</td>
       <td class="num {{ 'hl' if highlight == 'sat_fat' }}">{{ p.sat_fat_g | nutrient("g") }}</td>
+      {% if removable %}
+      <td>
+        <form method="post" action="/favorites/{{ p.food_code }}/delete" style="margin: 0">
+          <input type="hidden" name="next" value="/favorites">
+          <button class="secondary small" type="submit">빼기</button>
+        </form>
+      </td>
+      {% endif %}
     </tr>
     {% endfor %}
   </tbody>

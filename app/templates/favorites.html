@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}관심 제품 - 가공식품 영양 비교{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <h2>관심 제품</h2>
+    <span class="muted small">{{ products | length }}개 · 최근에 저장한 것 먼저</span>
+  </div>
+  {% if products %}
+    {% set highlight = None %}
+    {% set removable = True %}
+    {% include "_product_table.html" %}
+  {% else %}
+    <p class="muted">아직 저장한 제품이 없어요. 제품 상세 화면에서 ☆ 버튼으로 저장할 수 있어요.</p>
+  {% endif %}
+</section>
+{% endblock %}
