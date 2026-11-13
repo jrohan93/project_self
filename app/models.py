@@ -1,8 +1,9 @@
 """DB 테이블 정의."""
 
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Index, Numeric, String
+from sqlalchemy import DateTime, Index, Numeric, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -44,3 +45,16 @@ class Product(Base):
         Index("ft_products_name", "name", mysql_prefix="FULLTEXT", mysql_with_parser="ngram"),
         Index("ft_products_maker", "maker", mysql_prefix="FULLTEXT", mysql_with_parser="ngram"),
     )
+
+
+class User(Base):
+    """회원 (v3). 가입할 때는 이메일·비밀번호만 받는다 (개인정보는 쓸 곳이 생길 때 받는다)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 소문자로 바꿔 저장한다 (A@x.com과 a@x.com은 같은 사람). 같은 이메일로 두 번 가입하지 못하게 unique
+    email: Mapped[str] = mapped_column(String(255), unique=True)
+    # 비밀번호 원문은 저장하지 않고 bcrypt 해시만 저장한다 ($2b$12$... 60글자)
+    password_hash: Mapped[str] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -18,6 +18,10 @@ jinja2==3.1.6        # 화면(HTML 템플릿)
 # 캐시 (v2)
 redis==8.1.0
 
+# 회원 (v3)
+bcrypt==5.0.0       # 비밀번호 해시
+PyJWT==2.15.1       # 로그인 토큰(JWT)
+
 # 테스트
 pytest==9.2.0
 httpx==0.28.1        # FastAPI TestClient가 사용

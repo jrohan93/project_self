@@ -1,6 +1,6 @@
 """여러 테스트 파일이 같이 쓰는 준비물.
 
-engine: 테스트 전용 DB(TEST_DATABASE_URL)에 빈 products 테이블을 만들어 준다.
+engine: 테스트 전용 DB(TEST_DATABASE_URL)에 빈 products·users 테이블을 만들어 준다.
         마이그레이션은 테스트 실행마다 한 번만 처음부터 다시 적용하고(FULLTEXT 인덱스 만들기가 느려서),
         테스트마다 DELETE로 테이블만 비운다.
 api: 그 테스트 DB를 쓰는 FastAPI TestClient.
@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from app import cache
+from app import auth, cache
 from app.main import app, get_session
 
 load_dotenv()
@@ -32,6 +32,14 @@ def no_cache(monkeypatch):
     """모든 테스트에서 기본은 캐시 끔: 실제 캐시(REDIS_URL)에 테스트 데이터가 섞이지 않게,
     그리고 테스트마다 테이블을 비우는데 앞 테스트의 캐시 결과가 나오지 않게."""
     monkeypatch.setattr(cache, "client", None)
+
+
+@pytest.fixture(autouse=True)
+def fast_auth(monkeypatch):
+    """회원 테스트: bcrypt 반복을 2^12 → 2^4로 줄여 빠르게(해시 한 번 약 0.3초 → 1ms),
+    토큰 서명 키는 .env 값 대신 테스트용 값을 쓴다."""
+    monkeypatch.setattr(auth, "BCRYPT_ROUNDS", 4)
+    monkeypatch.setenv("JWT_SECRET", "test-secret-for-pytest-only-0123456789")
 
 
 @pytest.fixture(scope="session")
@@ -63,6 +71,7 @@ def engine(migrated_engine):
     """
     with migrated_engine.begin() as conn:
         conn.execute(text("DELETE FROM products"))
+        conn.execute(text("DELETE FROM users"))
     return migrated_engine
 
 

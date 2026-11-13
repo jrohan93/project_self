@@ -9,16 +9,20 @@ from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import cache
+from app import auth, cache
 from app.compare import Basis, SortKey, compare_products
 from app.db import make_engine
-from app.models import Product
+from app.models import Product, User
 from app.recommend import RECOMMEND_COLUMNS, RecommendKey, find_alternatives
-from app.schemas import AlternativesResult, CompareResult, ProductItem, SearchResult
+from app.schemas import (AlternativesResult, CompareResult, LoginRequest, ProductItem, SearchResult, SignupRequest,
+                         TokenResponse, UserItem)
 from app.search import SearchTarget, search_products
 
 app = FastAPI(title="가공식품 영양 비교 검색")
@@ -152,6 +156,57 @@ def compare(
     session: Session = Depends(get_session),
 ) -> CompareResult:
     return compare_result(session, category, basis, sort, page, size)
+
+
+# ---------------- 회원 API (v3) ----------------
+
+# 'Authorization: Bearer <토큰>' 머리말을 읽는다. auto_error=False: 없을 때 403 대신 아래에서 401을 준다
+bearer = HTTPBearer(auto_error=False)
+LOGIN_FAILED = "이메일 또는 비밀번호가 맞지 않아요."  # 어느 쪽이 틀렸는지 알려 주지 않는다
+
+
+def current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    session: Session = Depends(get_session),
+) -> User:
+    """로그인이 필요한 API에 붙인다. 토큰이 없거나, 틀렸거나, 만료됐거나, 그 회원이 없으면 401."""
+    user_id = auth.read_access_token(credentials.credentials) if credentials else None
+    user = session.get(User, user_id) if user_id is not None else None
+    if user is None:
+        raise HTTPException(status_code=401, detail="로그인이 필요해요.", headers={"WWW-Authenticate": "Bearer"})
+    return user
+
+
+@app.post("/api/auth/signup", response_model=UserItem, status_code=201)
+def signup(body: SignupRequest, session: Session = Depends(get_session)) -> UserItem:
+    user = User(email=body.email, password_hash=auth.hash_password(body.password))
+    session.add(user)
+    try:
+        session.commit()
+    except IntegrityError:  # email unique: 이미 가입된 이메일 (동시에 두 번 가입해도 DB가 막아 준다)
+        session.rollback()
+        raise HTTPException(status_code=409, detail="이미 가입된 이메일이에요.")
+    session.refresh(user)  # DB가 정한 id·created_at을 읽어 온다
+    return UserItem.model_validate(user)
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(body: LoginRequest, session: Session = Depends(get_session)) -> TokenResponse:
+    email = auth.normalize_email(body.email)
+    user = session.scalars(select(User).where(User.email == email)).one_or_none()
+
+    # 가입하지 않은 이메일도 가짜 해시로 한 번 확인한다: 응답 시간이 같아서 가입 여부를 알 수 없게
+    password_ok = auth.verify_password(body.password, user.password_hash if user else auth.DUMMY_HASH)
+    if user is None or not password_ok:
+        raise HTTPException(status_code=401, detail=LOGIN_FAILED)
+
+    return TokenResponse(access_token=auth.create_access_token(user.id),
+                         expires_in=auth.ACCESS_TOKEN_MINUTES * 60)
+
+
+@app.get("/api/me", response_model=UserItem)
+def me(user: User = Depends(current_user)) -> UserItem:
+    return UserItem.model_validate(user)
 
 
 # ---------------- 화면 (HTML) ----------------

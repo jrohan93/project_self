@@ -25,9 +25,9 @@
 ## 단계별 계획
 | 단계 | 기간 | 내용 |
 |---|---|---|
-| **v1 핵심** (지금) | 2주 | 데이터 적재, 제품 검색, 상세, 같은 종류 비교, 대체 제품 추천, 간단한 웹 화면 |
+| v1 핵심 | 2주 | 데이터 적재, 제품 검색, 상세, 같은 종류 비교, 대체 제품 추천, 간단한 웹 화면 |
 | v2 성능 | 1주 | 인덱스, 한글 검색(MySQL FULLTEXT ngram), Redis 캐시, 속도 측정 |
-| v3 회원 | 1주 | 로그인, 관심 제품 저장 (리프레시 토큰 순환, 로그인 실패 제한) |
+| **v3 회원** (지금) | 1주 | 로그인, 관심 제품 저장 (리프레시 토큰 순환, 로그인 실패 제한) |
 | v4 AI | 1주 | "덜 단 아이 간식" 같은 문장을 검색 조건으로 변환 (AI는 해석만, 계산은 코드) |
 | v5 확장 | 이후 | 원재료성식품 데이터를 합쳐 식단 기록 |
 
@@ -42,6 +42,21 @@
 - 검색 응답 시간 측정 기록 (v2 비교용)
 
 **하지 않는다**: 로그인, AI, 캐시, 원재료 데이터, 건강 목표·몸 상태 입력
+
+### v3 범위 (2026-11-13 결정)
+인증 방식: **이메일 + 비밀번호**로 시작하고, 2단계 인증(이메일 인증번호)은 기본이 끝난 뒤 추가한다 (사용자 결정: 단계로 나눔).
+- 휴대폰(SMS) 인증은 하지 않는다: 발송 업체·발신번호 등록·건당 비용이 필요하고, SIM 복제에 약함 (NIST도 SMS는 제한적 수단으로 분류)
+- 가입 시 받는 정보는 이메일·비밀번호만 (개인정보 최소 수집. 이름·생년은 쓸 곳이 생기면 그때)
+
+| 단계 | 내용 |
+|---|---|
+| 1단계 | 회원가입·로그인: `users` 테이블, 비밀번호 bcrypt, 액세스 토큰(JWT, 짧게) |
+| 2단계 | 리프레시 토큰 순환 + 재사용 감지(이미 쓴 토큰이 오면 그 사용자 토큰 전부 끊기), 로그아웃 |
+| 3단계 | 로그인 실패 5회/15분 잠금 (Redis, 가입 여부와 무관하게 같은 응답) |
+| 4단계 | 관심 제품 저장·목록·삭제, 남의 데이터는 404, 화면 연결 |
+| 추가 | 2단계 인증: 로그인 시 이메일 인증번호 (secrets로 6자리, 해시 저장, 10분 만료, 5회 제한, 재발송 제한, 개발 중엔 로그로만) |
+
+**하지 않는다**: 휴대폰 인증, 소셜 로그인, 이름·생년 등 추가 개인정보, 비밀번호 찾기(필요하면 제안만)
 
 ## 데이터
 출처: 공공데이터포털 표준데이터 API (공공누리 저작자표시 → 화면에 "출처: 공공데이터포털" 표시 필요)
@@ -70,28 +85,30 @@
 - 명백한 오류 목록(나트륨 > 39,300mg/100 9건, 당류 > 탄수화물 4건, 포화지방 > 지방 22건)은 `reports/data_issues.csv`.
 - **중복 규칙 (2026-11-11 결정)**: 식품명 + 업체 + 기준량 + 에너지·나트륨·당류·포화지방이 모두 같을 때만 하나로 합친다 (329,363 → 324,763행). 이름+제조사만 같은 묶음 중 3,937개는 영양값이 달라 다른 제품으로 본다.
 
-## 코드 구조 (v1 완료: 적재·검색·상세·비교·추천·웹 화면. v2 완료: 인덱스·FULLTEXT·Redis 캐시. 다음은 v3 회원)
+## 코드 구조 (v1 완료: 적재·검색·상세·비교·추천·웹 화면. v2 완료: 인덱스·FULLTEXT·Redis 캐시. v3 회원 진행 중: 1단계 가입·로그인)
 | 경로 | 내용 |
 |---|---|
 | `app/db.py` | `.env`의 `DATABASE_URL`로 엔진 생성 |
+| `app/auth.py` | 회원 인증(v3): `hash_password`/`verify_password`(bcrypt, `BCRYPT_ROUNDS=12`), `create_access_token`/`read_access_token`(JWT HS256 15분, `.env`의 `JWT_SECRET`), 없는 이메일용 `DUMMY_HASH`(응답 시간으로 가입 여부 안 드러나게), 비밀번호 조합 규칙 `follows_password_rule`(2종류 이상 10자 / 3종류 이상 8자) |
 | `app/cache.py` | Redis 캐시(v2): `get_or_set(key, 모델, compute)`로 결과 JSON 저장, TTL 1시간, `clear()`로 `nutri:*` 키 SCAN 삭제(적재 후 호출). `REDIS_URL`이 없거나 Redis가 꺼져 있으면 DB만 사용 |
-| `app/models.py` | `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). v2 인덱스 3개: (category, basis, sodium_mg / sugar_g / sat_fat_g), alembic `0002`. FULLTEXT ngram `ft_products_name`·`ft_products_maker`, alembic `0003` (불용어 끄고 만듦) |
-| `app/main.py` | FastAPI 앱. API: `GET /api/products` (검색), `GET /api/products/{식품코드}` (상세, 없으면 404), `.../alternatives` (추천), `GET /api/compare` (같은 종류 비교). 화면: `/` (검색), `/products/{식품코드}` (상세 + 추천 5개씩), `/compare`. `format_nutrient` 필터로 NULL은 "정보 없음". 결과는 `search_result`·`compare_result`·`alternatives_result`가 캐시를 거쳐 만듦(API·화면 공용). 실행 `uvicorn app.main:app --reload` |
+| `app/models.py` | `users` 테이블(v3, email unique·소문자, password_hash, alembic `0004`), `products` 테이블 (PK 식품코드, 영양값 4개 NULL 허용). v2 인덱스 3개: (category, basis, sodium_mg / sugar_g / sat_fat_g), alembic `0002`. FULLTEXT ngram `ft_products_name`·`ft_products_maker`, alembic `0003` (불용어 끄고 만듦) |
+| `app/main.py` | FastAPI 앱. API: `GET /api/products` (검색), `GET /api/products/{식품코드}` (상세, 없으면 404), `.../alternatives` (추천), `GET /api/compare` (같은 종류 비교). 화면: `/` (검색), `/products/{식품코드}` (상세 + 추천 5개씩), `/compare`. `format_nutrient` 필터로 NULL은 "정보 없음". 결과는 `search_result`·`compare_result`·`alternatives_result`가 캐시를 거쳐 만듦(API·화면 공용). 회원 API(v3): `POST /api/auth/signup`(201, 중복 409), `POST /api/auth/login`(실패는 이유 상관없이 같은 401), `GET /api/me`(`current_user` 의존성, Bearer 토큰). 실행 `uvicorn app.main:app --reload` |
 | `app/templates/` | Jinja2 템플릿. `base.html`(공통 스타일: `:root` 색 변수 + 다크 모드, 카드형, 기준 칸 강조 `.hl`, 정보 없음 `.na`. "출처: 공공데이터포털" 표시), `search`·`detail`·`compare`·`not_found`, 공통 조각 `_product_table`·`_pager`·`_size_picker` |
 | `.claude/launch.json` | 브라우저 미리보기용 서버 설정 (uvicorn 8000번) |
 | `app/recommend.py` | 대체 제품 추천: 같은 (대표식품명, 기준량)에서 나트륨 또는 당류가 기준 제품보다 낮은 제품, 낮은 순(당류로 찾을 때는 나트륨이 더 높은 것 제외). 기준 값이 NULL이면 빈 목록. API는 `GET /api/products/{식품코드}/alternatives?by=sodium|sugar&limit=10` |
 | `app/compare.py` | 같은 종류 비교: (대표식품명, 기준량) 묶음을 나트륨·당류·포화지방 낮은 순, NULL은 `IS NULL`로 맨 뒤 |
 | `app/search.py` | 검색: 제품 이름 또는 회사 이름(`target`) — `text_condition`: 2글자 이상 낱말이면 FULLTEXT `MATCH` + `LIKE`(결과는 LIKE와 같음), 한 글자·부호로 끊긴 검색어나 대표식품명이 있을 때는 `LIKE`만 + 대표식품명·기준량 필터 + 영양값 이하 조건(`max_kcal`·`max_sodium`·`max_sugar`·`max_sat_fat`, NULL은 제외) + 이름·식품코드순 + 쪽 나누기 |
-| `app/schemas.py` | 응답 모양 (pydantic). 영양값은 float, 없으면 null |
+| `app/schemas.py` | 요청·응답 모양 (pydantic). 영양값은 float, 없으면 null. 회원: `SignupRequest`(이메일 형식·소문자, 비밀번호 조합 규칙 `auth.follows_password_rule`·72바이트 이하), `LoginRequest`, `UserItem`(해시 없음), `TokenResponse` |
 | `scripts/measure_search.py` | 검색·상세·비교·추천 응답 시간 측정 (README "성능 기록"). `python -m scripts.measure_search` (캐시 적중) / `--no-cache` (DB) |
 | `app/loader.py` | 적재: CSV → 보정 → 칼럼 정리 → 중복 합치기 → `ON DUPLICATE KEY UPDATE` → 캐시 비우기. `python -m app.loader` |
 | `alembic/` | 마이그레이션. `alembic.ini`는 **ASCII만** (Windows에서 cp949로 읽혀 한글이 있으면 깨짐) |
 | `docker-compose.yml`, `docker/mysql-init.sql` | MySQL 8.4 + 테스트 DB `nutrition_test`, Redis 8.0 (실제 캐시 DB 0, 테스트 DB 1) |
-| `tests/` | `pytest`. `test_indexes.py`는 인덱스 존재·EXPLAIN 확인. 마이그레이션은 실행마다 한 번(`migrated_engine`, session), 테스트마다 `DELETE`(TRUNCATE는 FULLTEXT 때문에 1~2초). 캐시는 기본 끔(`no_cache` autouse), 캐시 테스트만 `redis_cache`(TEST_REDIS_URL). DB 테스트는 `TEST_DATABASE_URL` 사용(준비물 `engine`·`api`는 `conftest.py`), MySQL 꺼져 있으면 skip |
+| `tests/` | `pytest`. `test_indexes.py`는 인덱스 존재·EXPLAIN 확인. 마이그레이션은 실행마다 한 번(`migrated_engine`, session), 테스트마다 `DELETE`(TRUNCATE는 FULLTEXT 때문에 1~2초). 캐시는 기본 끔(`no_cache` autouse), 회원 테스트는 bcrypt 2^4·테스트용 JWT 키(`fast_auth` autouse), 캐시 테스트만 `redis_cache`(TEST_REDIS_URL). DB 테스트는 `TEST_DATABASE_URL` 사용(준비물 `engine`·`api`는 `conftest.py`), MySQL 꺼져 있으면 skip |
 
 ## 이전 경험에서 가져올 것
 - 이전 레시피 앱 설계에서 정한 것: 비밀번호 bcrypt, JWT, 리프레시 토큰 순환·재사용 감지, 로그인 실패 5회/15분 잠금(Redis, 가입 여부와 무관), 타인 데이터 접근 시 404. → v3에서 재사용.
 - 그 코드 자체는 남아 있지 않으므로 새로 작성한다.
+- 이전 팀 프로젝트(AH_05_01)의 이메일 인증번호 설계(secrets 6자리, sha256 해시 저장, 10분 만료, 5회 제한, 발송 설정 없으면 개발용 동작·운영이면 오류)를 v3 "추가" 단계에서 참고. 코드는 새로 작성.
 
 ## 아직 정할 것
 - [x] 화면 방식 → Jinja2 템플릿
@@ -122,4 +139,5 @@
   - 6건은 근거를 못 찾아 나트륨을 NULL로 (사용자 결정): 햄프국간장·청정원5년숙성·해천 해선간장·다화당 조선간장·한식조선간장·ICHIBIKI 사시미용. 그중 에너지 5~9kcal로 1회분 값처럼 보이는 3건(청정원·해천·ICHIBIKI)은 에너지·당류도 NULL
   - `corrections.csv`에서 수정값 칸을 비우면 NULL이 됨 (read_csv가 빈칸을 NaN으로 읽음)
   - 한식조선간장은 라벨 자체가 100g당 613mg으로 인쇄됨(천일염 20%면 약 7,800mg이어야 함). 해천은 찾은 라벨의 수입사가 달라 근거로 안 씀
+- [x] v3 1단계 회원가입·로그인 (2026-11-13): 이메일+비밀번호(가입 때 이것만, 생년월일 등은 나중에 개인정보 입력 때 — 사용자 결정), bcrypt 2^12, 비밀번호는 국내 기준 조합 규칙(영문 대·소문자·숫자·특수문자 중 2종류 이상 10자 / 3종류 이상 8자, 사용자 결정), JWT 15분, 실패는 같은 401 + 없는 이메일도 가짜 해시로 확인. 가입 384ms·로그인 330ms(대부분 bcrypt)·실패 347~369ms·`/api/me` 14.5ms. 테스트 106개 약 13초
 - [ ] TestClient가 `httpx` 대신 `httpx2`를 권장하는 경고가 뜸 → 바꿀지 결정 필요 (지금은 httpx 0.28.1, 동작에는 문제 없음)
