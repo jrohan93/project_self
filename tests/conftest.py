@@ -5,11 +5,13 @@ engine: 테스트 전용 DB(TEST_DATABASE_URL)에 빈 products·users·refresh_t
         테스트마다 DELETE로 테이블만 비운다.
 api: 그 테스트 DB를 쓰는 FastAPI TestClient.
 redis_cache: 테스트 전용 Redis(TEST_REDIS_URL)를 비워서 캐시로 끼운다. 이게 없는 테스트는 캐시를 끈 채로 돈다.
+login_limit_redis: 같은 방식으로 로그인 실패 제한(v3 3단계)에 끼운다. 이게 없으면 제한 없이 돈다.
 MySQL이 떠 있지 않으면 그 테스트는 건너뛴다 (docker compose up -d 후 실행).
 """
 
 import os
 
+import bcrypt
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -19,7 +21,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from app import auth, cache
+from app import auth, cache, login_limit
 from app.main import app, get_session
 
 load_dotenv()
@@ -29,9 +31,15 @@ TEST_REDIS_URL = os.getenv("TEST_REDIS_URL")
 
 @pytest.fixture(autouse=True)
 def no_cache(monkeypatch):
-    """모든 테스트에서 기본은 캐시 끔: 실제 캐시(REDIS_URL)에 테스트 데이터가 섞이지 않게,
+    """모든 테스트에서 기본은 캐시·로그인 실패 제한 끔: 실제 캐시(REDIS_URL)에 테스트 데이터가 섞이지 않게,
     그리고 테스트마다 테이블을 비우는데 앞 테스트의 캐시 결과가 나오지 않게."""
     monkeypatch.setattr(cache, "client", None)
+    monkeypatch.setattr(login_limit, "client", None)  # 로그인 실패 제한도 기본은 끔 (같은 이유)
+    monkeypatch.setattr(login_limit, "down_until", 0.0)  # 앞 테스트의 "Redis 꺼짐" 표시가 넘어오지 않게
+
+
+# 반복 2^4로 만든 가짜 해시 (auth.DUMMY_HASH는 2^12라 한 번에 0.3초)
+FAST_DUMMY_HASH = bcrypt.hashpw(b"no-such-user", bcrypt.gensalt(4)).decode()
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +47,7 @@ def fast_auth(monkeypatch):
     """회원 테스트: bcrypt 반복을 2^12 → 2^4로 줄여 빠르게(해시 한 번 약 0.3초 → 1ms),
     토큰 서명 키는 .env 값 대신 테스트용 값을 쓴다."""
     monkeypatch.setattr(auth, "BCRYPT_ROUNDS", 4)
+    monkeypatch.setattr(auth, "DUMMY_HASH", FAST_DUMMY_HASH)  # 없는 이메일 확인도 빠르게
     monkeypatch.setenv("JWT_SECRET", "test-secret-for-pytest-only-0123456789")
 
 
@@ -100,4 +109,18 @@ def redis_cache(monkeypatch):
     except cache.redis.RedisError:
         pytest.skip("테스트 Redis에 연결할 수 없음 (docker compose up -d 했는지 확인)")
     monkeypatch.setattr(cache, "client", client)
+    return client
+
+
+@pytest.fixture
+def login_limit_redis(monkeypatch):
+    """테스트 전용 Redis DB를 비우고 로그인 실패 제한에 끼운다. Redis가 꺼져 있으면 건너뛴다."""
+    if not TEST_REDIS_URL:
+        pytest.skip(".env에 TEST_REDIS_URL이 없음")
+    client = cache.connect(TEST_REDIS_URL)
+    try:
+        client.flushdb()
+    except cache.redis.RedisError:
+        pytest.skip("테스트 Redis에 연결할 수 없음 (docker compose up -d 했는지 확인)")
+    monkeypatch.setattr(login_limit, "client", client)
     return client

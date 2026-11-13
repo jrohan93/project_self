@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlencode
 
+import redis
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -16,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import auth, cache, refresh
+from app import auth, cache, login_limit, refresh
 from app.compare import Basis, SortKey, compare_products
 from app.db import make_engine
 from app.models import Product, User
@@ -163,6 +164,8 @@ def compare(
 # 'Authorization: Bearer <토큰>' 머리말을 읽는다. auto_error=False: 없을 때 403 대신 아래에서 401을 준다
 bearer = HTTPBearer(auto_error=False)
 LOGIN_FAILED = "이메일 또는 비밀번호가 맞지 않아요."  # 어느 쪽이 틀렸는지 알려 주지 않는다
+LOGIN_LOCKED = "로그인을 여러 번 실패했어요. 15분 뒤에 다시 해 주세요."
+LOGIN_UNAVAILABLE = "지금은 로그인할 수 없어요. 잠시 뒤에 다시 해 주세요."  # Redis가 꺼져 실패 횟수를 확인할 수 없을 때
 LOGIN_AGAIN = "다시 로그인해 주세요."  # 리프레시 토큰이 없거나·끊겼거나·만료됐거나·재사용됨 (이유는 알려 주지 않는다)
 
 
@@ -204,13 +207,25 @@ def signup(body: SignupRequest, session: Session = Depends(get_session)) -> User
 @app.post("/api/auth/login", response_model=TokenResponse)
 def login(body: LoginRequest, session: Session = Depends(get_session)) -> TokenResponse:
     email = auth.normalize_email(body.email)
-    user = session.scalars(select(User).where(User.email == email)).one_or_none()
 
-    # 가입하지 않은 이메일도 가짜 해시로 한 번 확인한다: 응답 시간이 같아서 가입 여부를 알 수 없게
-    password_ok = auth.verify_password(body.password, user.password_hash if user else auth.DUMMY_HASH)
-    if user is None or not password_ok:
-        raise HTTPException(status_code=401, detail=LOGIN_FAILED)
+    try:
+        # 5번 틀려서 막혀 있으면 비밀번호를 확인하지도 않는다 (맞는 비밀번호여도 막는다: 아니면 계속 넣어 볼 수 있음)
+        wait = login_limit.locked_seconds(email)
+        if wait:
+            raise HTTPException(status_code=429, detail=LOGIN_LOCKED, headers={"Retry-After": str(wait)})
 
+        user = session.scalars(select(User).where(User.email == email)).one_or_none()
+
+        # 가입하지 않은 이메일도 가짜 해시로 한 번 확인한다: 응답 시간이 같아서 가입 여부를 알 수 없게
+        password_ok = auth.verify_password(body.password, user.password_hash if user else auth.DUMMY_HASH)
+        if user is None or not password_ok:
+            login_limit.record_failure(email)  # 가입하지 않은 이메일도 똑같이 센다
+            raise HTTPException(status_code=401, detail=LOGIN_FAILED)
+    except redis.RedisError:
+        # Redis가 꺼져 실패 횟수를 확인·기록할 수 없으면 로그인을 받지 않는다 (제한 없이 받으면 무차별 대입을 못 막음)
+        raise HTTPException(status_code=503, detail=LOGIN_UNAVAILABLE) from None
+
+    login_limit.reset(email)  # 지우지 못해도 로그인은 그대로 (login_limit.reset 참고)
     return token_response(session, user.id)
 
 
